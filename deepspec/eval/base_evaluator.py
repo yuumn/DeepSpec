@@ -683,7 +683,8 @@ class BaseEvaluator:
                 rows=[metrics_row],
                 model_name_or_path=self.args.target_name_or_path,
                 draft_name_or_path=self.args.draft_name_or_path,
-                header=False,
+                # header=False,
+                header=True,
             ),
             flush=True,
         )

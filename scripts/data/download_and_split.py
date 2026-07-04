@@ -155,7 +155,11 @@ def write_train_jsonl(dataset, output_path: Path) -> int:
     with output_path.open("w", encoding="utf-8") as handle:
         for row_number, row in enumerate(dataset, start=1):
             converted = normalize_conversations(row)
-            validate_conversations(converted, row_number)
+            try:
+                validate_conversations(converted, row_number)
+            except ValueError as exc:
+                print(f"skipping row {row_number}: {exc}")
+                continue
             handle.write(json.dumps(converted, ensure_ascii=False) + "\n")
             count += 1
     return count
@@ -167,7 +171,11 @@ def write_eval_jsonl(dataset, output_path: Path) -> int:
     with output_path.open("w", encoding="utf-8") as handle:
         for row_number, row in enumerate(dataset, start=1):
             converted = normalize_conversations(row)
-            validate_conversations(converted, row_number)
+            try:
+                validate_conversations(converted, row_number)
+            except ValueError as exc:
+                print(f"skipping row {row_number}: {exc}")
+                continue
             turns = user_turns(converted)
             handle.write(json.dumps({"turns": turns}, ensure_ascii=False) + "\n")
             count += 1

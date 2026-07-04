@@ -5,7 +5,9 @@ set -euo pipefail
 #   pip install "sglang[all]"
 # See https://docs.sglang.ai/get_started/install.html for details.
 
-model_path=Qwen/Qwen3-4B
+# model_path=Qwen/Qwen3-4B
+model_name=Qwen/Qwen3-4B
+model_path=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/models/Qwen/Qwen3-4B
 num_workers=8
 start_port=30000
 start_nccl_port=31000
@@ -106,6 +108,7 @@ for ((gpu_id = 0; gpu_id < num_workers; gpu_id++)); do
         --nccl-port "${nccl_port}" \
         --dtype "${dtype}" \
         --mem-fraction-static "${mem_frac}" \
+        --served-model-name "${model_name}" \
         "$@" > "${log_file}" 2>&1 &
     pids+=("$!")
     ports+=("${port}")
