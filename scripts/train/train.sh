@@ -6,14 +6,14 @@
 # single-node local run; total GPU workers come from CUDA_VISIBLE_DEVICES.
 
 DEEPSPEC_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec
-
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
 export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
 export MASTER_PORT=${MASTER_PORT:-29500}
 export RANK=${RANK:-0}
 export WORLD_SIZE=${WORLD_SIZE:-1}
-export BASE_TB_DIR=${BASE_TB_DIR:-${DEEPSPEC_DIR}/.tensorboard}
-export BASE_CKPT_DIR=${BASE_CKPT_DIR:-${DEEPSPEC_DIR}/.checkpoints}
+export BASE_TB_DIR=${BASE_TB_DIR:-${DEEPSPEC_DIR}/train_log_checkpoints/train_qwen3_4b_${TIMESTAMP}/tensorboard}
+export BASE_CKPT_DIR=${BASE_CKPT_DIR:-${DEEPSPEC_DIR}/train_log_checkpoints/train_qwen3_4b_${TIMESTAMP}/checkpoints}
 # Available public configs:
 ## dflash
 #   config/dflash/dflash_gemma4_12b.py
@@ -45,7 +45,14 @@ target_cache_dir=${target_cache_dir:-${DEEPSPEC_DIR}/.cache/qwen3_4b_target_cach
 # with more memory (e.g. 4 or 8 on 80GB cards), or keep it at 1 if you hit OOM.
 # Override it without editing the config via:
 #   --opts "train.local_batch_size=4"
+
+
+mkdir -p ${DEEPSPEC_DIR}/train_log_checkpoints/train_qwen3_4b_${TIMESTAMP}
+
 python train.py \
     --config config/dspark/dspark_qwen3_4b.py \
     --opts "data.target_cache_path=${target_cache_dir}" \
-    --opts "train.local_batch_size=32" 
+    --opts "train.local_batch_size=4" \
+    --opts "logging.checkpointing_steps=500" \
+    2>&1 | tee ${DEEPSPEC_DIR}/train_log_checkpoints/train_qwen3_4b_${TIMESTAMP}/train.log
+

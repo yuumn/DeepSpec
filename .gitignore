@@ -13,3 +13,4 @@ dist/
 .checkpoints/
 .tensorboard/
 .claude/
+train_log_checkpoints/

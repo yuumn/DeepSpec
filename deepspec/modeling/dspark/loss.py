@@ -29,19 +29,19 @@ def _build_loss_weight_mask(
     device: torch.device,
     loss_decay_gamma: Optional[float],
 ) -> torch.Tensor:
-    loss_weight_mask = eval_mask.to(torch.float32)
+    loss_weight_mask = eval_mask.to(torch.float32) # [bsz, num_blocks, block_size]
     if loss_decay_gamma is not None and loss_decay_gamma > 0:
         positions = torch.arange(block_size, device=device).view(1, 1, -1) # [1, 1, block_size], [0, 1, 2, ..., block_size - 1]
         decay_weights = torch.exp(-positions.float() / float(loss_decay_gamma))
         loss_weight_mask = loss_weight_mask * decay_weights
-    return loss_weight_mask
+    return loss_weight_mask # [bsz, num_blocks, block_size]
 
 
 def _compute_local_probabilistic_stats(
     *,
     outputs: DSparkForwardOutput,
-    accept_rate_3d: Optional[torch.Tensor],
-    valid_block_weights: torch.Tensor,
+    accept_rate_3d: Optional[torch.Tensor], # [bsz, num_blocks, block_size]
+    valid_block_weights: torch.Tensor, # [bsz, num_blocks]
 ) -> tuple[torch.Tensor, torch.Tensor]:
     _, _, block_size, _ = outputs.draft_logits.shape
     device = outputs.draft_logits.device
@@ -49,10 +49,10 @@ def _compute_local_probabilistic_stats(
     if accept_rate_3d is None:
         return outputs.draft_logits.new_zeros((), dtype=torch.float32), pos_accept_sums
 
-    valid_accept_rate = accept_rate_3d * outputs.eval_mask.to(torch.float32)
-    pos_accept_sums = valid_accept_rate.sum(dim=(0, 1))
-    expected_draft_accepted = valid_accept_rate.cumprod(dim=-1).sum(dim=-1)
-    tau_prob_per_block = expected_draft_accepted + 1.0
+    valid_accept_rate = accept_rate_3d * outputs.eval_mask.to(torch.float32) # [bsz, num_blocks, block_size]
+    pos_accept_sums = valid_accept_rate.sum(dim=(0, 1)) # [block_size]
+    expected_draft_accepted = valid_accept_rate.cumprod(dim=-1).sum(dim=-1) # [bsz, num_blocks]
+    tau_prob_per_block = expected_draft_accepted + 1.0 # [bsz, num_blocks]
     tau_prob_sum = (tau_prob_per_block * valid_block_weights).sum()
     return tau_prob_sum, pos_accept_sums
 
@@ -60,21 +60,21 @@ def _compute_local_probabilistic_stats(
 def _compute_accept_rate_3d(
     *,
     outputs: DSparkForwardOutput,
-    aligned_target_logits: Optional[torch.Tensor],
+    aligned_target_logits: Optional[torch.Tensor], # [bsz, num_blocks, block_size, vocab_size]
 ) -> Optional[torch.Tensor]:
     if aligned_target_logits is None:
         return None
     draft_probs = torch.softmax(outputs.draft_logits.float(), dim=-1)
     target_probs = torch.softmax(aligned_target_logits.float(), dim=-1)
     accept_rate_3d = 1.0 - 0.5 * (draft_probs - target_probs).abs().sum(dim=-1)
-    return accept_rate_3d.clamp_(0.0, 1.0)
+    return accept_rate_3d.clamp_(0.0, 1.0) # [bsz, num_blocks, block_size]
 
 
 def _compute_local_l1_term(
     *,
     outputs: DSparkForwardOutput,
-    aligned_target_logits: Optional[torch.Tensor],
-    loss_weight_mask: torch.Tensor,
+    aligned_target_logits: Optional[torch.Tensor], # [bsz, num_blocks, block_size, vocab_size]
+    loss_weight_mask: torch.Tensor, # [bsz, num_blocks, block_size]
 ) -> tuple[torch.Tensor, torch.Tensor]:
     zero = outputs.draft_logits.new_zeros((), dtype=torch.float32)
     if aligned_target_logits is None:
@@ -103,10 +103,10 @@ def _collect_local_terms(
         aligned_target_logits=aligned_target_logits, # [bsz, num_blocks, block_size, vocab_size]
     )
     """
-    draft_logits = outputs.draft_logits
-    target_ids = outputs.target_ids
-    eval_mask = outputs.eval_mask
-    block_keep_mask = outputs.block_keep_mask
+    draft_logits = outputs.draft_logits # [bsz, num_blocks, block_size, vocab_size]
+    target_ids = outputs.target_ids # [bsz, num_blocks, block_size], [input_ids[:, anchor_pos + 1], input_ids[:, anchor_pos + 2], ..., input_ids[:, min(anchor_pos + block_size, seq_len - 1)]]
+    eval_mask = outputs.eval_mask # [bsz, num_blocks, block_size], bool
+    block_keep_mask = outputs.block_keep_mask # [bsz, num_anchors], num_anchors == num_blocks
     _, _, block_size, vocab_size = draft_logits.shape
     device = draft_logits.device
 
@@ -115,18 +115,18 @@ def _collect_local_terms(
         block_size=block_size,
         device=device,
         loss_decay_gamma=loss_decay_gamma,
-    )
-    flat_logits = draft_logits.reshape(-1, vocab_size)
-    flat_targets = target_ids.reshape(-1)
-    flat_weights = loss_weight_mask.reshape(-1)
-    loss_per_token = F.cross_entropy(flat_logits, flat_targets, reduction="none")
+    ) # [bsz, num_blocks, block_size]
+    flat_logits = draft_logits.reshape(-1, vocab_size) # [bsz * num_blocks * block_size, vocab_size]
+    flat_targets = target_ids.reshape(-1) # [bsz * num_blocks * block_size]
+    flat_weights = loss_weight_mask.reshape(-1) # [bsz * num_blocks * block_size]
+    loss_per_token = F.cross_entropy(flat_logits, flat_targets, reduction="none") # [bsz * num_blocks * block_size]
     ce_loss_num = (loss_per_token * flat_weights).sum()
     ce_loss_den = flat_weights.sum()
-    aligned_target_logits = outputs.aligned_target_logits
+    aligned_target_logits = outputs.aligned_target_logits # [bsz, num_blocks, block_size, vocab_size]
     accept_rate_3d = _compute_accept_rate_3d(
         outputs=outputs,
         aligned_target_logits=aligned_target_logits,
-    )
+    ) # [bsz, num_blocks, block_size]
     zero = ce_loss_num.new_zeros(())
     assert l1_loss_alpha <= 0 or aligned_target_logits is not None, (
         "aligned_target_logits is required when l1_loss_alpha > 0."
@@ -142,16 +142,16 @@ def _collect_local_terms(
         l1_loss_den = zero
 
     with torch.no_grad():
-        pos_total_counts = eval_mask.to(torch.float32).sum(dim=(0, 1))
-        valid_pred_tokens = eval_mask.any(dim=-1)
-        valid_blocks = block_keep_mask & valid_pred_tokens
-        valid_block_weights = valid_blocks.to(torch.float32)
+        pos_total_counts = eval_mask.to(torch.float32).sum(dim=(0, 1)) # [bsz, num_blocks, block_size]
+        valid_pred_tokens = eval_mask.any(dim=-1) # [bsz, num_blocks], bool
+        valid_blocks = block_keep_mask & valid_pred_tokens # [bsz, num_blocks], bool
+        valid_block_weights = valid_blocks.to(torch.float32) # [bsz, num_blocks]
         accept_block_count = valid_block_weights.sum()
         tau_prob_sum, pos_accept_sums = _compute_local_probabilistic_stats(
             outputs=outputs,
-            accept_rate_3d=accept_rate_3d,
-            valid_block_weights=valid_block_weights,
-        )
+            accept_rate_3d=accept_rate_3d, # [bsz, num_blocks, block_size]
+            valid_block_weights=valid_block_weights, # [bsz, num_blocks]
+        ) # [1], [block_size]
 
     has_confidence = outputs.confidence_pred is not None
     confidence_loss_num = zero
@@ -163,10 +163,10 @@ def _collect_local_terms(
         assert accept_rate_3d is not None, (
             "aligned_target_logits is required when confidence head is enabled."
         )
-        confidence_targets = accept_rate_3d.detach()
+        confidence_targets = accept_rate_3d.detach() # [bsz, num_blocks, block_size]
         confidence_errors = F.binary_cross_entropy_with_logits(
-            outputs.confidence_pred.float(),
-            confidence_targets,
+            outputs.confidence_pred.float(), # [bsz, num_blocks, block_size, 1] -> [bsz, num_blocks, block_size]
+            confidence_targets, # [bsz, num_blocks, block_size]
             reduction="none",
         ) * loss_weight_mask
         confidence_loss_num = confidence_errors.sum()

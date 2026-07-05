@@ -8,7 +8,8 @@ BASE_TB_DIR = os.environ.get("BASE_TB_DIR", os.path.expanduser("~/tensorboard"))
 BASE_CKPT_DIR = os.environ.get("BASE_CKPT_DIR", os.path.expanduser("~/checkpoints"))
 
 project_name = "deepspec"
-exp_name = f"dspark_block7_qwen3_4b_{timestamp}"
+# exp_name = f"dspark_block7_qwen3_4b_{timestamp}"
+exp_name = f"dspark_block7_qwen3_4b"
 seed = 42
 
 model = dict(

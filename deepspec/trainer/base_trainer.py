@@ -390,7 +390,10 @@ class BaseTrainer:
                     grad_norm=grad_norm.item(),
                 )
 
-                if self.global_step % int(self.args.logging.checkpointing_steps) == 0:
+                if (
+                    self.global_step % int(self.args.logging.checkpointing_steps) == 0
+                    or self.global_step % int(self.steps_per_epoch) == 0
+                ):
                     self.save_and_eval_checkpoint()
 
                 if self.suspend_controller.requested():
@@ -403,3 +406,4 @@ class BaseTrainer:
         training_logger.close()
         dist.barrier()
         dist.destroy_process_group()
+
