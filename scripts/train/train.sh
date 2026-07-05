@@ -4,12 +4,16 @@
 # torchrun semantics. train.py spawns one worker per visible GPU by itself.
 # Here RANK/WORLD_SIZE mean node_rank/node_count, so WORLD_SIZE=1 is a
 # single-node local run; total GPU workers come from CUDA_VISIBLE_DEVICES.
+
+DEEPSPEC_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec
+
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
 export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
 export MASTER_PORT=${MASTER_PORT:-29500}
 export RANK=${RANK:-0}
 export WORLD_SIZE=${WORLD_SIZE:-1}
-
+export BASE_TB_DIR=${BASE_TB_DIR:-${DEEPSPEC_DIR}/.tensorboard}
+export BASE_CKPT_DIR=${BASE_CKPT_DIR:-${DEEPSPEC_DIR}/.checkpoints}
 # Available public configs:
 ## dflash
 #   config/dflash/dflash_gemma4_12b.py
@@ -27,7 +31,8 @@ export WORLD_SIZE=${WORLD_SIZE:-1}
 #   config/eagle3/eagle3_qwen3_8b.py
 #   config/eagle3/eagle3_qwen3_14b.py
 
-target_cache_dir=${target_cache_dir:-${HOME}/.cache/deepspec/qwen3_4b_target_cache}
+# target_cache_dir=${target_cache_dir:-${HOME}/.cache/deepspec/qwen3_4b_target_cache}
+target_cache_dir=${target_cache_dir:-${DEEPSPEC_DIR}/.cache/qwen3_4b_target_cache}
 
 # --opts overrides any config field by dotted key path: --opts "<key.path>=<value>".
 # Values are parsed as Python scalars (int/float/bool/str). Repeat the flag to set
@@ -42,4 +47,5 @@ target_cache_dir=${target_cache_dir:-${HOME}/.cache/deepspec/qwen3_4b_target_cac
 #   --opts "train.local_batch_size=4"
 python train.py \
     --config config/dspark/dspark_qwen3_4b.py \
-    --opts "data.target_cache_path=${target_cache_dir}"
+    --opts "data.target_cache_path=${target_cache_dir}" \
+    --opts "train.local_batch_size=32" 

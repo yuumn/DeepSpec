@@ -387,10 +387,10 @@ class Qwen3DSparkModel(Qwen3PreTrainedModel):
 
     def forward(
         self,
-        input_ids: torch.Tensor,
-        target_hidden_states: torch.Tensor,
-        loss_mask: torch.Tensor,
-        target_last_hidden_states: Optional[torch.Tensor] = None,
+        input_ids: torch.Tensor, # [bsz, seq_len]
+        target_hidden_states: torch.Tensor, # [bsz, seq_len, 5 * hidden_dim]
+        loss_mask: torch.Tensor, # [bsz, seq_len]
+        target_last_hidden_states: Optional[torch.Tensor] = None, # [bsz, seq_len, hidden_dim]
     ) -> DSparkForwardOutput:
         bsz, seq_len = input_ids.shape
         device = input_ids.device
@@ -400,7 +400,7 @@ class Qwen3DSparkModel(Qwen3PreTrainedModel):
             loss_mask=loss_mask,
             num_anchors=self.num_anchors,
             device=device,
-        )
+        ) # [bsz, num_anchors], [bsz, num_anchors]
         noise_embedding = create_noise_embed(
             self.embed_tokens,
             input_ids,
@@ -408,10 +408,10 @@ class Qwen3DSparkModel(Qwen3PreTrainedModel):
             block_keep_mask,
             mask_token_id=self.mask_token_id,
             block_size=self.block_size,
-        )
-        context_position_ids = torch.arange(seq_len, device=device).unsqueeze(0).expand(bsz, -1)
-        draft_position_ids = create_position_ids(anchor_positions, self.block_size)
-        full_position_ids = torch.cat([context_position_ids, draft_position_ids], dim=1)
+        ) # [bsz, num_blocks * block_size, hidden_dim]
+        context_position_ids = torch.arange(seq_len, device=device).unsqueeze(0).expand(bsz, -1) # [bsz, seq_len]
+        draft_position_ids = create_position_ids(anchor_positions, self.block_size) # [bsz, num_blocks * block_size], num_anchors == num_blocks
+        full_position_ids = torch.cat([context_position_ids, draft_position_ids], dim=1) # [bsz, seq_len + num_blocks * block_size]
         dspark_attn_mask = create_dspark_attention_mask(
             anchor_positions=anchor_positions,
             block_keep_mask=block_keep_mask,
@@ -424,73 +424,73 @@ class Qwen3DSparkModel(Qwen3PreTrainedModel):
             noise_embedding=noise_embedding,
             target_hidden_states=target_hidden_states,
             attention_mask=dspark_attn_mask,
-        )
+        ) # [bsz, num_blocks * block_size, hidden_dim]
 
         num_blocks = anchor_positions.size(1)
-        output_hidden_4d = output_hidden.reshape(bsz, num_blocks, self.block_size, -1)
+        output_hidden_4d = output_hidden.reshape(bsz, num_blocks, self.block_size, -1) # [bsz, num_blocks, block_size, hidden_dim]
 
         label_offsets = torch.arange(1, self.block_size + 1, device=device).view(
             1, 1, -1
-        )
-        label_indices = anchor_positions.unsqueeze(-1) + label_offsets
-        safe_label_indices = label_indices.clamp(max=seq_len - 1)
+        ) # [1, 1, block_size], [1, 2, ..., block_size]
+        label_indices = anchor_positions.unsqueeze(-1) + label_offsets # [bsz, num_blocks, block_size], [anchor_pos + 1, anchor_pos + 2, ..., anchor_pos + block_size]
+        safe_label_indices = label_indices.clamp(max=seq_len - 1) # [bsz, num_blocks, block_size]
         safe_label_indices = torch.where(
             block_keep_mask.unsqueeze(-1),
             safe_label_indices,
             torch.zeros_like(safe_label_indices),
-        )
+        ) # [bsz, num_blocks, block_size], [anchor_pos + 1, anchor_pos + 2, ..., min(anchor_pos + block_size, seq_len - 1)] or [0, 0, ..., 0]
         target_ids = torch.gather(
-            input_ids.unsqueeze(1).expand(-1, anchor_positions.size(1), -1),
+            input_ids.unsqueeze(1).expand(-1, anchor_positions.size(1), -1), # [bsz, num_blocks, seq_len]
             2,
             safe_label_indices,
-        )
+        ) # [bsz, num_blocks, block_size], [input_ids[:, anchor_pos + 1], input_ids[:, anchor_pos + 2], ..., input_ids[:, min(anchor_pos + block_size, seq_len - 1)]]
         aligned_target_logits = None
         if target_last_hidden_states is not None:
-            target_pred_indices = (safe_label_indices - 1).clamp(min=0)
+            target_pred_indices = (safe_label_indices - 1).clamp(min=0) # [bsz, num_blocks, block_size], [anchor_pos, anchor_pos, ..., min(anchor_pos + block_size, seq_len - 1) - 1] or [0, 0, ..., 0]
             aligned_target_hidden = torch.gather(
                 target_last_hidden_states.unsqueeze(1).expand(
                     -1,
                     anchor_positions.size(1),
                     -1,
                     -1,
-                ),
+                ), # [bsz, num_blocks, seq_len, hidden_dim]
                 2,
                 target_pred_indices.unsqueeze(-1).expand(
                     -1,
                     -1,
                     -1,
                     target_last_hidden_states.size(-1),
-                ),
-            )
-            aligned_target_logits = self.compute_logits(aligned_target_hidden)
+                ), # [bsz, num_blocks, block_size, hidden_dim]
+            ) # [bsz, num_blocks, block_size, hidden_dim]
+            aligned_target_logits = self.compute_logits(aligned_target_hidden) # [bsz, num_blocks, block_size, vocab_size]
         eval_mask = build_eval_mask(
             seq_len=seq_len,
-            loss_mask=loss_mask,
-            label_indices=label_indices,
-            safe_label_indices=safe_label_indices,
-            block_keep_mask=block_keep_mask,
-        )
+            loss_mask=loss_mask, # [bsz, seq_len]
+            label_indices=label_indices, # [bsz, num_blocks, block_size], [anchor_pos + 1, anchor_pos + 2, ..., anchor_pos + block_size]
+            safe_label_indices=safe_label_indices, # [bsz, num_blocks, block_size], [anchor_pos + 1, anchor_pos + 2, ..., min(anchor_pos + block_size, seq_len - 1)] or [0, 0, ..., 0]
+            block_keep_mask=block_keep_mask, # [bsz, num_anchors]
+        ) # [bsz, num_blocks, block_size], bool
         anchor_token_ids = torch.gather(
-            input_ids,
+            input_ids, # [bsz, seq_len]
             1,
-            anchor_positions,
-        )
+            anchor_positions, # [bsz, num_blocks]
+        ) # [bsz, num_blocks]
         prev_token_ids = torch.cat(
             [anchor_token_ids.unsqueeze(-1), target_ids[:, :, :-1]],
             dim=-1,
-        )
+        ) # [bsz, num_blocks, block_size], [input_ids[:, anchor_pos], input_ids[:, anchor_pos + 1], input_ids[:, anchor_pos + 2], ..., input_ids[:, min(anchor_pos + block_size, seq_len - 1)]]
         draft_logits = self.compute_logits(output_hidden).reshape(
             bsz,
             num_blocks,
             self.block_size,
             -1,
-        )
+        ) # [bsz, num_blocks, block_size, vocab_size]
         if self.markov_head is not None:
             draft_logits = self.markov_head.apply_block_logits(
-                draft_logits,
-                token_ids=prev_token_ids,
-                hidden_states=output_hidden_4d,
-            )
+                draft_logits, # [bsz, num_blocks, block_size, vocab_size]
+                token_ids=prev_token_ids, # [bsz, num_blocks, block_size]
+                hidden_states=output_hidden_4d, # [bsz, num_blocks, block_size, hidden_dim]
+            ) # [bsz, num_blocks, block_size, vocab_size]
 
         log_sampler_stats(
             seq_len=seq_len,
@@ -506,22 +506,22 @@ class Qwen3DSparkModel(Qwen3PreTrainedModel):
             if self.confidence_head_with_markov:
                 prev_embeddings = self.markov_head.get_prev_embeddings(prev_token_ids).to(
                     dtype=output_hidden_4d.dtype
-                )
+                ) # [bsz, num_blocks, block_size, markov_rank]
                 confidence_features = torch.cat(
                     [output_hidden_4d, prev_embeddings],
                     dim=-1,
-                )
-                confidence_pred = self.confidence_head(confidence_features).float()
+                ) # [bsz, num_blocks, block_size, hidden_dim + markov_rank]
+                confidence_pred = self.confidence_head(confidence_features).float() # [bsz, num_blocks, block_size, 1] -> [bsz, num_blocks, block_size]
             else:
                 confidence_pred = self.confidence_head(output_hidden_4d).float()
 
         return DSparkForwardOutput(
-            draft_logits=draft_logits,
-            target_ids=target_ids,
-            eval_mask=eval_mask,
-            block_keep_mask=block_keep_mask,
-            confidence_pred=confidence_pred,
-            aligned_target_logits=aligned_target_logits,
+            draft_logits=draft_logits, # [bsz, num_blocks, block_size, vocab_size]
+            target_ids=target_ids, # [bsz, num_blocks, block_size], [input_ids[:, anchor_pos + 1], input_ids[:, anchor_pos + 2], ..., input_ids[:, min(anchor_pos + block_size, seq_len - 1)]]
+            eval_mask=eval_mask, # [bsz, num_blocks, block_size], bool
+            block_keep_mask=block_keep_mask, # [bsz, num_anchors], num_anchors == num_blocks
+            confidence_pred=confidence_pred, # [bsz, num_blocks, block_size, 1] -> [bsz, num_blocks, block_size]
+            aligned_target_logits=aligned_target_logits, # [bsz, num_blocks, block_size, vocab_size]
         )
 
 

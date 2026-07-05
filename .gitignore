@@ -9,3 +9,7 @@ logs/
 build/
 dist/
 .DS_Store
+.cache/
+.checkpoints/
+.tensorboard/
+.claude/

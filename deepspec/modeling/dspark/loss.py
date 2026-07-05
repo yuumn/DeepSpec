@@ -24,14 +24,14 @@ def _all_reduce_loss_denominators(
 
 def _build_loss_weight_mask(
     *,
-    eval_mask: torch.Tensor,
+    eval_mask: torch.Tensor, # [bsz, num_blocks, block_size], bool
     block_size: int,
     device: torch.device,
     loss_decay_gamma: Optional[float],
 ) -> torch.Tensor:
     loss_weight_mask = eval_mask.to(torch.float32)
     if loss_decay_gamma is not None and loss_decay_gamma > 0:
-        positions = torch.arange(block_size, device=device).view(1, 1, -1)
+        positions = torch.arange(block_size, device=device).view(1, 1, -1) # [1, 1, block_size], [0, 1, 2, ..., block_size - 1]
         decay_weights = torch.exp(-positions.float() / float(loss_decay_gamma))
         loss_weight_mask = loss_weight_mask * decay_weights
     return loss_weight_mask
@@ -93,6 +93,16 @@ def _collect_local_terms(
     loss_decay_gamma: Optional[float],
     l1_loss_alpha: float,
 ) -> tuple[dict[str, torch.Tensor], bool]:
+    """
+    outputs: DSparkForwardOutput(
+        draft_logits=draft_logits, # [bsz, num_blocks, block_size, vocab_size]
+        target_ids=target_ids, # [bsz, num_blocks, block_size], [input_ids[:, anchor_pos + 1], input_ids[:, anchor_pos + 2], ..., input_ids[:, min(anchor_pos + block_size, seq_len - 1)]]
+        eval_mask=eval_mask, # [bsz, num_blocks, block_size], bool
+        block_keep_mask=block_keep_mask, # [bsz, num_anchors], num_anchors == num_blocks
+        confidence_pred=confidence_pred, # [bsz, num_blocks, block_size, 1] -> [bsz, num_blocks, block_size]
+        aligned_target_logits=aligned_target_logits, # [bsz, num_blocks, block_size, vocab_size]
+    )
+    """
     draft_logits = outputs.draft_logits
     target_ids = outputs.target_ids
     eval_mask = outputs.eval_mask
@@ -260,6 +270,16 @@ def compute_dspark_loss(
     l1_loss_alpha: float,
     confidence_head_alpha: float,
 ):
+    """
+    outputs: DSparkForwardOutput(
+        draft_logits=draft_logits, # [bsz, num_blocks, block_size, vocab_size]
+        target_ids=target_ids, # [bsz, num_blocks, block_size], [input_ids[:, anchor_pos + 1], input_ids[:, anchor_pos + 2], ..., input_ids[:, min(anchor_pos + block_size, seq_len - 1)]]
+        eval_mask=eval_mask, # [bsz, num_blocks, block_size], bool
+        block_keep_mask=block_keep_mask, # [bsz, num_anchors], num_anchors == num_blocks
+        confidence_pred=confidence_pred, # [bsz, num_blocks, block_size, 1] -> [bsz, num_blocks, block_size]
+        aligned_target_logits=aligned_target_logits, # [bsz, num_blocks, block_size, vocab_size]
+    )
+    """
     loss_terms, has_confidence = _collect_local_terms(
         outputs=outputs,
         loss_decay_gamma=loss_decay_gamma,

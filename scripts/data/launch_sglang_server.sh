@@ -6,15 +6,15 @@ set -euo pipefail
 # See https://docs.sglang.ai/get_started/install.html for details.
 
 # model_path=Qwen/Qwen3-4B
-model_name=Qwen/Qwen3-4B
-model_path=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/models/Qwen/Qwen3-4B
+model_name=Qwen/Qwen3-8B
+model_path=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/models/Qwen/Qwen3-8B
 num_workers=8
 start_port=30000
 start_nccl_port=31000
 host=0.0.0.0
 dtype=bfloat16
 mem_frac=0.9
-log_dir=logs/sglang_qwen3_4b
+log_dir=logs/sglang_qwen3_8b
 heartbeat_interval=300
 
 get_host_ip() {

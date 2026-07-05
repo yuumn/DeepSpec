@@ -42,10 +42,10 @@ class VanillaMarkov(nn.Module):
 
     def apply_block_logits(
         self,
-        base_logits: torch.Tensor,
+        base_logits: torch.Tensor, # [bsz, num_blocks, block_size, vocab_size]
         *,
-        token_ids: torch.Tensor,
-        hidden_states: Optional[torch.Tensor],
+        token_ids: torch.Tensor, # [bsz, num_blocks, block_size]
+        hidden_states: Optional[torch.Tensor], # [bsz, num_blocks, block_size, hidden_dim]
     ) -> torch.Tensor:
         if base_logits.size(2) == 0:
             return base_logits

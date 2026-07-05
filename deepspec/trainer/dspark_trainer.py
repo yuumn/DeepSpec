@@ -29,6 +29,16 @@ class Qwen3DSparkTrainer(BaseTrainer):
             loss_mask=batch["loss_mask"],
             target_last_hidden_states=batch["target_last_hidden_states"],
         )
+        """
+        outputs: DSparkForwardOutput(
+            draft_logits=draft_logits, # [bsz, num_blocks, block_size, vocab_size]
+            target_ids=target_ids, # [bsz, num_blocks, block_size], [input_ids[:, anchor_pos + 1], input_ids[:, anchor_pos + 2], ..., input_ids[:, min(anchor_pos + block_size, seq_len - 1)]]
+            eval_mask=eval_mask, # [bsz, num_blocks, block_size], bool
+            block_keep_mask=block_keep_mask, # [bsz, num_anchors], num_anchors == num_blocks
+            confidence_pred=confidence_pred, # [bsz, num_blocks, block_size, 1] -> [bsz, num_blocks, block_size]
+            aligned_target_logits=aligned_target_logits, # [bsz, num_blocks, block_size, vocab_size]
+        )
+        """
         loss = compute_dspark_loss(
             outputs=outputs,
             loss_decay_gamma=self.args.model.loss_decay_gamma,

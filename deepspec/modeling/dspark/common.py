@@ -109,7 +109,7 @@ def create_dspark_attention_mask(
 def build_anchor_candidate_mask(
     *,
     seq_len: int,
-    loss_mask: torch.Tensor,
+    loss_mask: torch.Tensor, # [bsz, seq_len]
 ) -> torch.Tensor:
     num_candidates = max(seq_len - 1, 0)
     if num_candidates == 0:
@@ -117,21 +117,21 @@ def build_anchor_candidate_mask(
 
     anchor_valid = loss_mask[:, :num_candidates] > 0.5
     first_target_valid = loss_mask[:, 1 : num_candidates + 1] > 0.5
-    return anchor_valid & first_target_valid
+    return anchor_valid & first_target_valid # [bsz, seq_len - 1], bool
 
 
 def sample_anchor_positions(
     *,
     seq_len: int,
-    loss_mask: torch.Tensor,
-    num_anchors: int,
-    device: torch.device,
+    loss_mask: torch.Tensor, # [bsz, seq_len]
+    num_anchors: int, # 512
+    device: torch.device, 
 ) -> tuple[torch.Tensor, torch.Tensor]:
     valid = build_anchor_candidate_mask(
         seq_len=seq_len,
         loss_mask=loss_mask,
-    )
-    valid_counts = valid.sum(dim=1)
+    ) # [bsz, seq_len - 1], bool
+    valid_counts = valid.sum(dim=1) # [bsz]
     bsz = loss_mask.shape[0]
     num_candidates = valid.shape[1]
     max_n = int(num_anchors)
@@ -143,16 +143,16 @@ def sample_anchor_positions(
     indices = torch.arange(num_candidates, device=device).unsqueeze(0).expand(
         bsz,
         -1,
-    )
+    ) # [bsz, seq_len - 1]
     masked_indices = torch.where(
         valid,
         indices,
         torch.full_like(indices, seq_len + 1),
-    )
-    random_vals = torch.rand(bsz, num_candidates, device=device)
-    random_vals = torch.where(valid, random_vals, torch.full_like(random_vals, 2.0))
-    _, sorted_idx = random_vals.sort(dim=1)
-    gathered = torch.gather(masked_indices, 1, sorted_idx)
+    ) # [bsz, seq_len - 1]
+    random_vals = torch.rand(bsz, num_candidates, device=device) # [bsz, seq_len - 1]
+    random_vals = torch.where(valid, random_vals, torch.full_like(random_vals, 2.0)) # [bsz, seq_len - 1]
+    _, sorted_idx = random_vals.sort(dim=1) # [bsz, seq_len - 1]
+    gathered = torch.gather(masked_indices, 1, sorted_idx) # [bsz, seq_len - 1]
     if num_candidates < max_n:
         pad = torch.full(
             (bsz, max_n - num_candidates),
@@ -161,31 +161,31 @@ def sample_anchor_positions(
             device=device,
         )
         gathered = torch.cat([gathered, pad], dim=1)
-    anchors = gathered[:, :max_n].sort(dim=1).values
+    anchors = gathered[:, :max_n].sort(dim=1).values # [bsz, num_anchors]
     keep_mask = torch.arange(max_n, device=device).unsqueeze(0) < (
         valid_counts.unsqueeze(1).clamp(max=max_n)
-    )
-    anchors = torch.where(keep_mask, anchors, torch.zeros_like(anchors))
+    ) # [bsz, num_anchors]
+    anchors = torch.where(keep_mask, anchors, torch.zeros_like(anchors)) # [bsz, num_anchors]
     return anchors, keep_mask
 
 
 def build_eval_mask(
     *,
     seq_len: int,
-    loss_mask: torch.Tensor,
-    label_indices: torch.Tensor,
-    safe_label_indices: torch.Tensor,
-    block_keep_mask: torch.Tensor,
+    loss_mask: torch.Tensor, # [bsz, seq_len]
+    label_indices: torch.Tensor, # [bsz, num_blocks, block_size], [anchor_pos + 1, anchor_pos + 2, ..., anchor_pos + block_size]
+    safe_label_indices: torch.Tensor, # [bsz, num_blocks, block_size], [anchor_pos + 1, anchor_pos + 2, ..., min(anchor_pos + block_size, seq_len - 1)] or [0, 0, ..., 0]
+    block_keep_mask: torch.Tensor, # [bsz, num_anchors], num_blocks == num_anchors
 ) -> torch.Tensor:
-    target_valid = label_indices < seq_len
+    target_valid = label_indices < seq_len # [bsz, num_blocks, block_size]
     target_loss_mask = torch.gather(
-        loss_mask.unsqueeze(1).expand(-1, label_indices.size(1), -1),
+        loss_mask.unsqueeze(1).expand(-1, label_indices.size(1), -1), # [bsz, num_blocks, seq_len]
         2,
         safe_label_indices,
-    )
-    eval_mask = target_valid & (target_loss_mask > 0.5)
-    eval_mask = eval_mask & block_keep_mask.unsqueeze(-1)
-    return eval_mask.to(torch.int32).cumprod(dim=-1).bool()
+    ) # [bsz, num_blocks, block_size]
+    eval_mask = target_valid & (target_loss_mask > 0.5) # [bsz, num_blocks, block_size]
+    eval_mask = eval_mask & block_keep_mask.unsqueeze(-1) # [bsz, num_blocks, block_size]
+    return eval_mask.to(torch.int32).cumprod(dim=-1).bool() # [bsz, num_blocks, block_size], bool
 
 
 @torch.no_grad()
@@ -201,7 +201,7 @@ def log_sampler_stats(
     valid_anchor_mask = build_anchor_candidate_mask(
         seq_len=seq_len,
         loss_mask=loss_mask,
-    )
+    ) # [bsz, seq_len - 1], bool
     valid_anchor_counts = valid_anchor_mask.sum(dim=1).to(torch.float32)
     valid_anchor_ratios = valid_anchor_counts / max(float(seq_len), 1.0)
     sampled_anchor_counts = block_keep_mask.sum(dim=1).to(torch.float32)
@@ -249,7 +249,7 @@ def log_sampler_stats(
 
 
 def create_position_ids(
-    anchor_positions: torch.Tensor,
+    anchor_positions: torch.Tensor, # [bsz, num_anchors]
     block_size: int,
 ) -> torch.Tensor:
     bsz, num_blocks = anchor_positions.shape
