@@ -2,7 +2,7 @@
 # semantics. eval.py spawns one worker per visible GPU by itself.
 # Here RANK/WORLD_SIZE mean node_rank/node_count, so WORLD_SIZE=1 is a
 # single-node local run; total GPU workers come from CUDA_VISIBLE_DEVICES.
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+export CUDA_VISIBLE_DEVICES=4,5,6,7
 export MASTER_ADDR=127.0.0.1
 export MASTER_PORT=29600
 export RANK=0
@@ -18,13 +18,18 @@ target_name_or_path=${MODEL_DIR}/Qwen/Qwen3-4B
 
 # draft_name_or_path=${HOME}/checkpoints/deepspec/dspark_block7_qwen3_4b/step_latest
 # draft_name_or_path=${MODEL_DIR}/deepseek-ai/eagle3_qwen3_4b_ttt7
-draft_name_or_path=${DEEPSEED_DIR}/train_log_checkpoints/train_qwen3_4b_20260705_174128/checkpoints/dspark_block7_qwen3_4b/step_2616
+# for STEP in 2616 5232 7848 9500; do
+for STEP in 10464; do
+    # CHECKPOINT_PATH="${CHECKPOINT_DIR}/checkpoint-${STEP}"
+    # ... existing code ...
+    draft_name_or_path=${DEEPSEED_DIR}/train_log_checkpoints/train_qwen3_4b_20260705_174128/checkpoints/dspark_block7_qwen3_4b/step_${STEP}
 
-output_dir=${DEEPSEED_DIR}/logs/eval_train_qwen3_4b
-mkdir -p ${output_dir}
+    output_dir=${DEEPSEED_DIR}/logs/eval_train_qwen3_4b
+    mkdir -p ${output_dir}
 
 
-python eval.py \
-    --target_name_or_path ${target_name_or_path} \
-    --draft_name_or_path ${draft_name_or_path} \
-    2>&1 | tee ${output_dir}/dspark_1epoch.log
+    python eval.py \
+        --target_name_or_path ${target_name_or_path} \
+        --draft_name_or_path ${draft_name_or_path} \
+        2>&1 | tee ${output_dir}/dspark_step_${STEP}.log
+done

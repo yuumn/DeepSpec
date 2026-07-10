@@ -7,13 +7,16 @@
 
 DEEPSPEC_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
+spec_mode=dflash
+OUTPUT_DIR=${DEEPSPEC_DIR}/train_log_checkpoints/train_${spec_mode}_qwen3_4b_${TIMESTAMP}
+# export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-4,5,6,7}
 export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
 export MASTER_PORT=${MASTER_PORT:-29500}
 export RANK=${RANK:-0}
 export WORLD_SIZE=${WORLD_SIZE:-1}
-export BASE_TB_DIR=${BASE_TB_DIR:-${DEEPSPEC_DIR}/train_log_checkpoints/train_qwen3_4b_${TIMESTAMP}/tensorboard}
-export BASE_CKPT_DIR=${BASE_CKPT_DIR:-${DEEPSPEC_DIR}/train_log_checkpoints/train_qwen3_4b_${TIMESTAMP}/checkpoints}
+export BASE_TB_DIR=${BASE_TB_DIR:-${OUTPUT_DIR}/tensorboard}
+export BASE_CKPT_DIR=${BASE_CKPT_DIR:-${OUTPUT_DIR}/checkpoints}
 # Available public configs:
 ## dflash
 #   config/dflash/dflash_gemma4_12b.py
@@ -46,13 +49,15 @@ target_cache_dir=${target_cache_dir:-${DEEPSPEC_DIR}/.cache/qwen3_4b_target_cach
 # Override it without editing the config via:
 #   --opts "train.local_batch_size=4"
 
+mkdir -p ${OUTPUT_DIR}
 
-mkdir -p ${DEEPSPEC_DIR}/train_log_checkpoints/train_qwen3_4b_${TIMESTAMP}
+MODEL_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/models
 
 python train.py \
-    --config config/dspark/dspark_qwen3_4b.py \
+    --config config/${spec_mode}/${spec_mode}_qwen3_4b.py \
     --opts "data.target_cache_path=${target_cache_dir}" \
     --opts "train.local_batch_size=4" \
-    --opts "logging.checkpointing_steps=500" \
-    2>&1 | tee ${DEEPSPEC_DIR}/train_log_checkpoints/train_qwen3_4b_${TIMESTAMP}/train.log
+    --opts "logging.checkpointing_steps=100" \
+    2>&1 | tee ${OUTPUT_DIR}/train.log
 
+    # --opts "model.target_model_name_or_path=${MODEL_DIR}/Qwen/Qwen3-4B" \
