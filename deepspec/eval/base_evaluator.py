@@ -308,11 +308,11 @@ def verify_draft_tokens(
 def generate_decoding_sample(
     *,
     target_model,
-    input_ids: torch.Tensor,
-    max_new_tokens: int,
-    max_proposal_tokens: int,
-    temperature: float,
-    stop_token_ids: list[int] | None,
+    input_ids: torch.Tensor, # [1, seq_len]
+    max_new_tokens: int, # 2048
+    max_proposal_tokens: int, # 7
+    temperature: float, # 1.0
+    stop_token_ids: list[int] | None, 
     init_context: Callable[..., Any],
     propose: Callable[..., DraftProposal],
     update: Callable[[Any, VerificationResult], None],
@@ -338,8 +338,8 @@ def generate_decoding_sample(
         (1, max_length + max_proposal_tokens + 1),
         dtype=torch.long,
         device=device,
-    )
-    position_ids = torch.arange(output_ids.shape[1], device=device).unsqueeze(0)
+    ) # [1, num_input_tokens + max_new_tokens + block_size + 1]
+    position_ids = torch.arange(output_ids.shape[1], device=device).unsqueeze(0) # [1, num_input_tokens + max_new_tokens + block_size + 1]
     past_key_values_target = DynamicCache()
 
     output = target_model(
@@ -356,7 +356,7 @@ def generate_decoding_sample(
         logits_to_probs(output.logits, float(temperature))
     )
 
-    start = input_ids.shape[1]
+    start = input_ids.shape[1] # num_input_tokens, int
     acceptance_lengths: list[int] = []
     proposal_lengths: list[int] = []
     accepted_draft_lengths: list[int] = []
@@ -381,6 +381,12 @@ def generate_decoding_sample(
         position_ids=position_ids,
         num_input_tokens=num_input_tokens,
     )
+    """
+    dspark:
+        context:
+            past_key_values_draft
+            target_hidden_states
+    """
 
     while start < max_length:
         proposal = propose(
@@ -537,10 +543,10 @@ class BaseEvaluator:
                 add_generation_prompt=True,
                 enable_thinking=False,
                 # enable_thinking=True,
-            ).to(self.device)
+            ).to(self.device) # [1, seq_len]
             responses.append(
                 self.generate_one_sample(
-                    input_ids=input_ids,
+                    input_ids=input_ids, # [1, seq_len]
                     stop_token_ids=stop_token_ids,
                 )
             )

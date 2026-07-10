@@ -99,10 +99,10 @@ class Qwen3DSparkEvaluator(BaseEvaluator):
     def _propose(
         self,
         *,
-        context: SimpleNamespace,
-        output_ids: torch.Tensor,
-        position_ids: torch.Tensor,
-        start: int,
+        context: SimpleNamespace, # past_key_values_draft target_hidden_states
+        output_ids: torch.Tensor, # [1, num_input_tokens + 1(author_token_id)]
+        position_ids: torch.Tensor,  # [1, num_input_tokens + max_new_tokens + block_size + 1]
+        start: int, # num_input_tokens == author_token_id_index
         stop_token_ids: list[int] | None = None,
     ) -> DraftProposal:
         model = self.draft_model
@@ -111,11 +111,11 @@ class Qwen3DSparkEvaluator(BaseEvaluator):
             int(model.mask_token_id),
             dtype=torch.long,
             device=output_ids.device,
-        )
-        draft_input_ids[:, 0] = output_ids[:, start]
+        ) # [1, 7(block_size)]
+        draft_input_ids[:, 0] = output_ids[:, start] 
         block_hidden = forward_dspark_draft_block(
             model,
-            draft_input_ids=draft_input_ids,
+            draft_input_ids=draft_input_ids, # [1, block_size]
             position_ids=position_ids,
             past_key_values_draft=context.past_key_values_draft,
             target_hidden_states=context.target_hidden_states,
@@ -162,15 +162,15 @@ class Qwen3DSparkEvaluator(BaseEvaluator):
     def generate_one_sample(
         self,
         *,
-        input_ids: torch.Tensor,
+        input_ids: torch.Tensor, # [1, seq_len]
         stop_token_ids: list[int] | None,
     ) -> SimpleNamespace:
         return generate_decoding_sample(
             target_model=self.target_model,
-            input_ids=input_ids,
-            max_new_tokens=int(self.args.max_new_tokens),
-            max_proposal_tokens=self.max_proposal_tokens,
-            temperature=float(self.args.temperature),
+            input_ids=input_ids, # [1, seq_len]
+            max_new_tokens=int(self.args.max_new_tokens), # 2048
+            max_proposal_tokens=self.max_proposal_tokens, # 7
+            temperature=float(self.args.temperature), # 1.0
             stop_token_ids=stop_token_ids,
             init_context=self._init_context,
             propose=self._propose,
