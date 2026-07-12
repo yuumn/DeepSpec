@@ -46,7 +46,8 @@ train = dict(
 logging = dict(
     logging_steps=10,
     checkpointing_steps=3000,
-    checkpoint_dir="",
+    resume_checkpoint_dir="",
+    # checkpoint_dir="",
     # tensorboard_dir="",
 )
 
@@ -65,8 +66,8 @@ def finalize_cfg(cfg):
     # logging_cfg["checkpoint_dir"] = os.path.join(BASE_CKPT_DIR, project_name, exp_name)
     # logging_cfg["tensorboard_dir"] = os.path.join(BASE_TB_DIR, project_name, exp_name)
     print(f"logging_cfg: {logging_cfg}")
-    if not logging_cfg["checkpoint_dir"]:
-        logging_cfg["checkpoint_dir"] = os.path.join(BASE_CKPT_DIR, exp_name)
+    # if not logging_cfg["checkpoint_dir"]:
+    logging_cfg["checkpoint_dir"] = os.path.join(BASE_CKPT_DIR, exp_name)
     # if not logging_cfg["tensorboard_dir"]:
     logging_cfg["tensorboard_dir"] = os.path.join(BASE_TB_DIR, exp_name)
     print(f"checkpoint_dir: {logging_cfg["checkpoint_dir"]}")

@@ -65,7 +65,7 @@ python train.py \
     --opts "logging.checkpointing_steps=100" \
     --opts "logging.logging_steps=1" \
     --opts "train.sharding_strategy=no_shard" \
-    --opts "logging.checkpoint_dir=${REUSE_CKPT_DIR}/checkpoints/dflash_block7_qwen3_4b" \
+    --opts "logging.resume_checkpoint_dir=${REUSE_CKPT_DIR}/checkpoints/dflash_block7_qwen3_4b" \
     2>&1 | tee ${OUTPUT_DIR}/train.log
 
     # --opts "logging.tensorboard_dir=${REUSE_CKPT_DIR}/tensorboard/dflash_block7_qwen3_4b" \

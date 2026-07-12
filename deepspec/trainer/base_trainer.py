@@ -154,9 +154,9 @@ class BaseTrainer:
         self.precision_dtype = _PRECISION_DTYPES[self.args.train.precision]
         self.checkpoint_dir_root = self.args.logging.checkpoint_dir
         self.resume_checkpoint_dir = discover_latest_checkpoint(
-            self.checkpoint_dir_root
+            # self.checkpoint_dir_root
+            self.args.logging.resume_checkpoint_dir
         )
-        print(f"self.checkpoint_dir_root: {self.checkpoint_dir_root}")
         print(f"self.checkpoint_dir_root: {self.checkpoint_dir_root}")
         print(f"self.resume_checkpoint_dir: {self.resume_checkpoint_dir }")
         self.suspend_controller = SuspendController(device=self.device)
