@@ -156,6 +156,9 @@ class BaseTrainer:
         self.resume_checkpoint_dir = discover_latest_checkpoint(
             self.checkpoint_dir_root
         )
+        print(f"self.checkpoint_dir_root: {self.checkpoint_dir_root}")
+        print(f"self.checkpoint_dir_root: {self.checkpoint_dir_root}")
+        print(f"self.resume_checkpoint_dir: {self.resume_checkpoint_dir }")
         self.suspend_controller = SuspendController(device=self.device)
         self.next_micro_step = 0
 

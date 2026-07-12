@@ -46,6 +46,8 @@ train = dict(
 logging = dict(
     logging_steps=10,
     checkpointing_steps=3000,
+    checkpoint_dir="",
+    # tensorboard_dir="",
 )
 
 data = dict(
@@ -62,8 +64,16 @@ def finalize_cfg(cfg):
     exp_name = str(cfg["exp_name"])
     # logging_cfg["checkpoint_dir"] = os.path.join(BASE_CKPT_DIR, project_name, exp_name)
     # logging_cfg["tensorboard_dir"] = os.path.join(BASE_TB_DIR, project_name, exp_name)
-    logging_cfg["checkpoint_dir"] = os.path.join(BASE_CKPT_DIR, exp_name)
+    print(f"logging_cfg: {logging_cfg}")
+    if not logging_cfg["checkpoint_dir"]:
+        logging_cfg["checkpoint_dir"] = os.path.join(BASE_CKPT_DIR, exp_name)
+    # if not logging_cfg["tensorboard_dir"]:
     logging_cfg["tensorboard_dir"] = os.path.join(BASE_TB_DIR, exp_name)
+    print(f"checkpoint_dir: {logging_cfg["checkpoint_dir"]}")
+    print(f"tensorboard_dir: {logging_cfg["tensorboard_dir"]}")
+    # else
+    # logging_cfg["checkpoint_dir"] = "/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec/train_log_checkpoints/train_dflash_qwen3_4b_20260710_232641/checkpoints/dflash_block7_qwen3_4b"
+    # logging_cfg["tensorboard_dir"] = "/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec/train_log_checkpoints/train_dflash_qwen3_4b_20260710_232641/tensorboard/dflash_block7_qwen3_4b"
     cfg["logging"] = logging_cfg
     
     return cfg

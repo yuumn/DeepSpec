@@ -1,8 +1,10 @@
 import os
 from deepspec.trainer import Qwen3Eagle3Trainer
 
-BASE_TB_DIR = os.path.expanduser("~/tensorboard")
-BASE_CKPT_DIR = os.path.expanduser("~/checkpoints")
+# BASE_TB_DIR = os.path.expanduser("~/tensorboard")
+# BASE_CKPT_DIR = os.path.expanduser("~/checkpoints")
+BASE_TB_DIR = os.environ.get("BASE_TB_DIR", os.path.expanduser("~/tensorboard"))
+BASE_CKPT_DIR = os.environ.get("BASE_CKPT_DIR", os.path.expanduser("~/checkpoints"))
 project_name = "deepspec"
 exp_name = "eagle3_ttt7_qwen3_4b"
 seed = 0
@@ -47,8 +49,10 @@ def finalize_cfg(cfg):
     logging_cfg = dict(cfg["logging"])
     project_name=str(cfg['project_name'])
     exp_name = str(cfg["exp_name"])
-    logging_cfg["checkpoint_dir"] = os.path.join(BASE_CKPT_DIR, project_name, exp_name)
-    logging_cfg["tensorboard_dir"] = os.path.join(BASE_TB_DIR, project_name, exp_name)
+    # logging_cfg["checkpoint_dir"] = os.path.join(BASE_CKPT_DIR, project_name, exp_name)
+    # logging_cfg["tensorboard_dir"] = os.path.join(BASE_TB_DIR, project_name, exp_name)
+    logging_cfg["checkpoint_dir"] = os.path.join(BASE_CKPT_DIR, exp_name)
+    logging_cfg["tensorboard_dir"] = os.path.join(BASE_TB_DIR, exp_name)
     cfg["logging"] = logging_cfg
     
     return cfg
