@@ -52,6 +52,7 @@ train = dict(
 logging = dict(
     logging_steps=10,
     checkpointing_steps=3000,
+    resume_checkpoint_dir="",
 )
 
 data = dict(

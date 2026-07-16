@@ -3,6 +3,8 @@ import math
 import os
 
 import torch
+import torchvision.models as models
+from torch.profiler import profile, ProfilerActivity, record_function
 import torch.distributed as dist
 from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -51,6 +53,9 @@ _HYBRID_STRATEGIES = (
     ShardingStrategy._HYBRID_SHARD_ZERO2,
 )
 
+PROFILE_STEPS = os.environ.get("PROFILE_STEPS", None)
+PROFILE_STEPS = int(PROFILE_STEPS) if PROFILE_STEPS is not None else None
+IS_PROFILE = PROFILE_STEPS is not None
 
 def _build_fsdp_kwargs(
     *, sharding_strategy_name: str, precision_dtype, world_size: int
@@ -167,6 +172,7 @@ class BaseTrainer:
             logging_steps=int(self.args.logging.logging_steps),
             tensorboard_dir=self.args.logging.tensorboard_dir,
         )
+        torch.cuda.memory._record_memory_history(max_entries=100000)
 
         self.draft_model, self.tokenizer = self.build_models()
         if self.resume_checkpoint_dir is not None:
@@ -398,15 +404,32 @@ class BaseTrainer:
                     or self.global_step % int(self.steps_per_epoch) == 0
                 ):
                     self.save_and_eval_checkpoint()
+                if IS_PROFILE and (self.global_step + 1) % PROFILE_STEPS == 0:
+                    # torch.cuda.synchronize()
+                    # torch.cuda.empty_cache()
+                    # torch.cuda.reset_peak_memory_stats()
+                    try:
+                        file_prefix = os.environ.get(
+                            "PROFILE_FILE_PREFIX", 
+                            f"/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec/scripts/train/profile/memory_{os.environ.get("TIMESTAMP", "")}_rank{self.global_rank}"
+                        )
+                        torch.cuda.memory._dump_snapshot(f"{file_prefix}.pickle")
+                    except Exception as e:
+                        logger.error(f"Failed to capture memory snapshot {e}")
+                    
+                    break
 
                 if self.suspend_controller.requested():
                     self._save_and_suspend()
                     return
+        if IS_PROFILE:
+            return 
 
         self.save_and_eval_checkpoint()
 
     def clean_up(self):
         training_logger.close()
+        torch.cuda.memory._record_memory_history(enabled=None)
         dist.barrier()
         dist.destroy_process_group()
 

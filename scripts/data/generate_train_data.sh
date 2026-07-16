@@ -2,7 +2,7 @@
 
 
 python scripts/data/generate_train_data.py \
-    --model Qwen/Qwen3-8B \
+    --model google/gemma-4-12B-it \
     --server-address \
         127.0.0.1:30000 \
         127.0.0.1:30001 \
@@ -21,4 +21,5 @@ python scripts/data/generate_train_data.py \
     --disable-thinking \
     --resume \
     --input-file-path train_datasets/perfectblend_train.jsonl \
-    --output-file-path train_datasets/qwen3_8b/perfectblend_train_regen.jsonl
+    --output-file-path train_datasets/gemma-4-12B-it/perfectblend_train_regen.jsonl \
+    2>&1 | tee train_datasets/gemma-4-12B-it/generate_train_data.log

@@ -4,7 +4,7 @@
 # single-node local run; total GPU workers come from CUDA_VISIBLE_DEVICES.
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 export MASTER_ADDR=127.0.0.1
-export MASTER_PORT=29600
+export MASTER_PORT=29900
 export RANK=0
 export WORLD_SIZE=1
 DEEPSEED_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec
@@ -19,7 +19,7 @@ target_name_or_path=${MODEL_DIR}/Qwen/Qwen3-4B
 # draft_name_or_path=${HOME}/checkpoints/deepspec/dspark_block7_qwen3_4b/step_latest
 # draft_name_or_path=${MODEL_DIR}/deepseek-ai/eagle3_qwen3_4b_ttt7
 checkpoint_dir=${DEEPSEED_DIR}/train_log_checkpoints/train_qwen3_4b_20260705_174128
-for epoch in $(seq 1 9); do
+for epoch in $(seq 10 10); do
     STEP=$((epoch * 2616))
 
 # for STEP in 10464; do
