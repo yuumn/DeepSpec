@@ -5,7 +5,7 @@ import torch.distributed as dist
 import torch.nn.functional as F
 
 from deepspec.utils.metrics import add_metric
-from .common import DSparkForwardOutput
+from .common import MySpecForwardOutput
 
 
 def _all_reduce_loss_denominators(
@@ -39,7 +39,7 @@ def _build_loss_weight_mask(
 
 def _compute_local_probabilistic_stats(
     *,
-    outputs: DSparkForwardOutput,
+    outputs: MySpecForwardOutput,
     accept_rate_3d: Optional[torch.Tensor], # [bsz, num_blocks, block_size]
     valid_block_weights: torch.Tensor, # [bsz, num_blocks]
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -59,7 +59,7 @@ def _compute_local_probabilistic_stats(
 
 def _compute_accept_rate_3d(
     *,
-    outputs: DSparkForwardOutput,
+    outputs: MySpecForwardOutput,
     aligned_target_logits: Optional[torch.Tensor], # [bsz, num_blocks, block_size, vocab_size]
 ) -> Optional[torch.Tensor]:
     if aligned_target_logits is None:
@@ -72,7 +72,7 @@ def _compute_accept_rate_3d(
 
 def _compute_local_l1_term(
     *,
-    outputs: DSparkForwardOutput,
+    outputs: MySpecForwardOutput,
     aligned_target_logits: Optional[torch.Tensor], # [bsz, num_blocks, block_size, vocab_size]
     loss_weight_mask: torch.Tensor, # [bsz, num_blocks, block_size]
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -89,12 +89,12 @@ def _compute_local_l1_term(
 
 def _collect_local_terms(
     *,
-    outputs: DSparkForwardOutput,
+    outputs: MySpecForwardOutput,
     loss_decay_gamma: Optional[float],
     l1_loss_alpha: float,
 ) -> tuple[dict[str, torch.Tensor], bool]:
     """
-    outputs: DSparkForwardOutput(
+    outputs: MySpecForwardOutput(
         draft_logits=draft_logits, # [bsz, num_blocks, block_size, vocab_size]
         target_ids=target_ids, # [bsz, num_blocks, block_size], [input_ids[:, anchor_pos + 1], input_ids[:, anchor_pos + 2], ..., input_ids[:, min(anchor_pos + block_size, seq_len - 1)]]
         eval_mask=eval_mask, # [bsz, num_blocks, block_size], bool
@@ -264,14 +264,14 @@ def _build_loss(
 
 def compute_myspec_loss(
     *,
-    outputs: DSparkForwardOutput,
+    outputs: MySpecForwardOutput,
     loss_decay_gamma: Optional[float],
     ce_loss_alpha: float,
     l1_loss_alpha: float,
     confidence_head_alpha: float,
 ):
     """
-    outputs: DSparkForwardOutput(
+    outputs: MySpecForwardOutput(
         draft_logits=draft_logits, # [bsz, num_blocks, block_size, vocab_size]
         target_ids=target_ids, # [bsz, num_blocks, block_size], [input_ids[:, anchor_pos + 1], input_ids[:, anchor_pos + 2], ..., input_ids[:, min(anchor_pos + block_size, seq_len - 1)]]
         eval_mask=eval_mask, # [bsz, num_blocks, block_size], bool

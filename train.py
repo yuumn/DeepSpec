@@ -2,7 +2,7 @@ import argparse
 import json
 import os
 import torch
-import torchvision.models as models
+# import torchvision.models as models
 from torch.profiler import profile, ProfilerActivity, record_function
 from deepspec.utils import (
     CustomJSONEncoder,

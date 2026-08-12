@@ -3,7 +3,6 @@ import math
 import os
 
 import torch
-import torchvision.models as models
 from torch.profiler import profile, ProfilerActivity, record_function
 import torch.distributed as dist
 from torch.distributed.device_mesh import init_device_mesh

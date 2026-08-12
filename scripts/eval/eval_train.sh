@@ -34,5 +34,5 @@ for epoch in $(seq 1 9); do
     python eval.py \
         --target_name_or_path ${target_name_or_path} \
         --draft_name_or_path ${draft_name_or_path} \
-        2>&1 | tee ${output_dir}/dspark_epoch_${epoch}.log
+        2>&1 | tee -a ${output_dir}/dspark_epoch_${epoch}.log
 done
