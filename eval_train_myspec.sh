@@ -18,13 +18,28 @@ target_name_or_path=${MODEL_DIR}/Qwen/Qwen3-4B
 
 # draft_name_or_path=${HOME}/checkpoints/deepspec/myspec_block7_qwen3_4b/step_latest
 # draft_name_or_path=${MODEL_DIR}/deepseek-ai/eagle3_qwen3_4b_ttt7
+
+
 checkpoint_dir=${DEEPSEED_DIR}/train_log_checkpoints/train_myspec_qwen3_4b_20260813_110505
-for epoch in $(seq 1 2); do
+for epoch in $(seq 1 1); do
     STEP=$((epoch * 2616))
 
-# for STEP in 10464; do
-    # CHECKPOINT_PATH="${CHECKPOINT_DIR}/checkpoint-${STEP}"
-    # ... existing code ...
+    draft_name_or_path=${checkpoint_dir}/checkpoints/myspec_block7_qwen3_4b/step_${STEP}
+
+    output_dir=${checkpoint_dir}/eval
+    mkdir -p ${output_dir}
+    # touch ${output_dir}/myspec_epoch_${epoch}.log
+
+    python eval.py \
+        --target_name_or_path ${target_name_or_path} \
+        --draft_name_or_path ${draft_name_or_path} \
+        2>&1 | tee -a ${output_dir}/myspec_epoch_${epoch}.log
+done
+
+checkpoint_dir=${DEEPSEED_DIR}/train_log_checkpoints/train_myspec_qwen3_4b_20260804_150823
+for epoch in $(seq 7 8); do
+    STEP=$((epoch * 2616))
+
     draft_name_or_path=${checkpoint_dir}/checkpoints/myspec_block7_qwen3_4b/step_${STEP}
 
     output_dir=${checkpoint_dir}/eval

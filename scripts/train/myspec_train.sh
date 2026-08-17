@@ -74,7 +74,7 @@ export TIMESTAMP=${TIMESTAMP}
     --config config/${spec_mode}/${spec_mode}_qwen3_4b.py \
     --opts "data.target_cache_path=${target_cache_dir}" \
     --opts "data.num_workers=32" \
-    --opts "train.local_batch_size=2" \
+    --opts "train.local_batch_size=4" \
     --opts "logging.checkpointing_steps=100" \
     --opts "logging.logging_steps=10" \
     --opts "train.sharding_strategy=no_shard" \
