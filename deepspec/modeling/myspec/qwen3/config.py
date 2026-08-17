@@ -35,7 +35,7 @@ def build_draft_config(
         )
 
     draft_config = copy.deepcopy(target_config)
-    draft_config.architectures = ["Qwen3DSparkModel"]
+    draft_config.architectures = ["Qwen3MySpecModel"]
     draft_config.num_target_layers = num_target_layers
     draft_config.num_hidden_layers = num_draft_layers
     draft_config.block_size = int(model_args.block_size)

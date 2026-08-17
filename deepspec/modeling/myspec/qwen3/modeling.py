@@ -41,7 +41,7 @@ def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
 
 
 class Qwen3DSparkAttention(nn.Module):
-    def __init__(self, config, layer_idx: int, target_kv_proj: Tuple[torch.Tensor, torch.Tensor]):
+    def __init__(self, config, layer_idx: int):
         super().__init__()
         self.config = config
         self.layer_idx = layer_idx
@@ -61,16 +61,16 @@ class Qwen3DSparkAttention(nn.Module):
             self.num_attention_heads * self.head_dim,
             bias=config.attention_bias,
         )
-        # self.k_proj = nn.Linear(
-        #     config.hidden_size,
-        #     self.num_key_value_heads * self.head_dim,
-        #     bias=config.attention_bias,
-        # )
-        # self.v_proj = nn.Linear(
-        #     config.hidden_size,
-        #     self.num_key_value_heads * self.head_dim,
-        #     bias=config.attention_bias,
-        # )
+        self.k_proj = nn.Linear(
+            config.hidden_size,
+            self.num_key_value_heads * self.head_dim,
+            bias=config.attention_bias,
+        )
+        self.v_proj = nn.Linear(
+            config.hidden_size,
+            self.num_key_value_heads * self.head_dim,
+            bias=config.attention_bias,
+        )
         self.k_proj_noise = nn.Linear(
             config.hidden_size,
             self.num_key_value_heads * self.head_dim,
@@ -93,9 +93,6 @@ class Qwen3DSparkAttention(nn.Module):
             if config.layer_types[layer_idx] == "sliding_attention"
             else None
         )
-        self.k_proj, self.v_proj = target_kv_proj
-        self.k_proj.requires_grad_(False)
-        self.v_proj.requires_grad_(False)
 
     def forward(
         self,
@@ -167,10 +164,10 @@ class Qwen3DSparkAttention(nn.Module):
 
 
 class Qwen3DSparkDecoderLayer(GradientCheckpointingLayer):
-    def __init__(self, config, layer_idx: int, target_kv_proj: Tuple[torch.Tensor, torch.Tensor]):
+    def __init__(self, config, layer_idx: int):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.self_attn = Qwen3DSparkAttention(config=config, layer_idx=layer_idx, target_kv_proj=target_kv_proj)
+        self.self_attn = Qwen3DSparkAttention(config=config, layer_idx=layer_idx)
         self.mlp = Qwen3MLP(config)
         self.input_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = Qwen3RMSNorm(
@@ -244,11 +241,9 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
             config.hidden_size,
             padding_idx=getattr(config, "pad_token_id", None),
         )
-        self.target_kv_proj = self.get_target_kv_proj()
-
         self.layers = nn.ModuleList(
             [
-                Qwen3DSparkDecoderLayer(config, layer_idx, self.target_kv_proj[layer_idx])
+                Qwen3DSparkDecoderLayer(config, layer_idx)
                 for layer_idx in range(config.num_hidden_layers)
             ]
         )
@@ -283,29 +278,35 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
                 input_dim += config.markov_rank
             self.confidence_head = AcceptRatePredictor(input_dim=input_dim)
         self.post_init()
-        
+        self.set_target_kv_proj_trainable(False)
 
-    def get_target_kv_proj(
-        self,
-        target_model_path: str = "/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/models/Qwen/Qwen3-4B",
-    ) -> list[tuple[nn.Module, nn.Module]]:
-        from transformers import AutoModel
-
-        target_model = AutoModel.from_pretrained(target_model_path)
-        target_layers = target_model.layers
-        target_kv_proj = []
-
-        for layer_id in self.target_layer_ids:
-            next_layer_id = int(layer_id) + 1
-            if not 0 <= next_layer_id < len(target_layers):
-                raise ValueError(
-                    f"target_layer_id {layer_id} has no following decoder layer "
-                    f"in a target model with {len(target_layers)} layers."
+    def initialize_target_kv_proj(self, target_model: nn.Module) -> None:
+        target_layers = target_model.model.layers
+        assert len(self.layers) == len(self.target_layer_ids), (
+            "Each draft layer requires one target_layer_id."
+        )
+        target_layer_ids = [int(layer_id) + 1 for layer_id in self.target_layer_ids]
+        assert all(
+            0 <= layer_id < len(target_layers) for layer_id in target_layer_ids
+        ), (
+            "Each target_layer_id must have a following decoder layer."
+        )
+        with torch.no_grad():
+            for draft_layer, layer_id in zip(self.layers, target_layer_ids):
+                target_attention = target_layers[layer_id].self_attn
+                draft_attention = draft_layer.self_attn
+                draft_attention.k_proj.load_state_dict(
+                    target_attention.k_proj.state_dict()
                 )
-            target_attention = target_layers[next_layer_id].self_attn
-            target_kv_proj.append((target_attention.k_proj, target_attention.v_proj))
+                draft_attention.v_proj.load_state_dict(
+                    target_attention.v_proj.state_dict()
+                )
+        self.set_target_kv_proj_trainable(False)
 
-        return target_kv_proj
+    def set_target_kv_proj_trainable(self, trainable: bool) -> None:
+        for layer in self.layers:
+            layer.self_attn.k_proj.requires_grad_(trainable)
+            layer.self_attn.v_proj.requires_grad_(trainable)
 
     def initialize_embeddings_and_head(
         self,

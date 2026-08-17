@@ -50,13 +50,17 @@ def parse_args():
 
 
 def main(local_rank: int, args):
-    if local_rank == 0:
-        print(json.dumps(args, indent=4, cls=CustomJSONEncoder), flush=True)
-    draft_config = AutoConfig.from_pretrained(args.draft_name_or_path)
-    evaluator_cls = EVALUATORS[draft_config.architectures[0]]
-    evaluator = evaluator_cls(local_rank, args)
-    evaluator.evaluate()
-    evaluator.clean_up()
+    try:
+        if local_rank == 0:
+            print(json.dumps(args, indent=4, cls=CustomJSONEncoder), flush=True)
+        draft_config = AutoConfig.from_pretrained(args.draft_name_or_path)
+        evaluator_cls = EVALUATORS[draft_config.architectures[0]]
+        evaluator = evaluator_cls(local_rank, args)
+        evaluator.evaluate()
+    finally:
+        if torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
+
 
 if __name__ == "__main__":
     args = parse_args()

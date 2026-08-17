@@ -21,6 +21,10 @@ class Qwen3MySpecTrainer(BaseTrainer):
         )
         return Qwen3MySpecModel(draft_config)
 
+    def _initialize_draft_from_target(self, draft_model, target_model):
+        super()._initialize_draft_from_target(draft_model, target_model)
+        draft_model.initialize_target_kv_proj(target_model)
+
     # Training step.
     def run_batch(self, batch):
         outputs = self.model(

@@ -76,6 +76,7 @@ class Qwen3MySpecEvaluator(BaseEvaluator):
             dtype=torch.bfloat16,
             attn_implementation=self.EVAL_ATTN_IMPLEMENTATION,
         ).to(self.device).eval()
+        draft_model.set_target_kv_proj_trainable(False)
         assert_no_final_target_layer(target_model, draft_model.target_layer_ids)
         assert 0.0 <= float(self.args.confidence_threshold) <= 1.0
         tokenizer = AutoTokenizer.from_pretrained(self.args.target_name_or_path)
@@ -218,4 +219,3 @@ class Qwen3MySpecEvaluator(BaseEvaluator):
         super().print_results()
         if self.confidence_head_recorder is not None:
             self.confidence_head_recorder.print_results()
-

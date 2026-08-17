@@ -265,12 +265,16 @@ class BaseTrainer:
         )
         draft_model = draft_model.to(device=self.device, dtype=self.precision_dtype)
 
-        # Training only uses the target checkpoint to initialize frozen draft
-        # embeddings and lm_head weights.
+        # Initialize frozen draft weights copied from the target checkpoint.
         target_model = AutoModelForCausalLM.from_pretrained(
             model_args.target_model_name_or_path,
             dtype=self.precision_dtype,
         ).to(device="cpu").eval()
+        self._initialize_draft_from_target(draft_model, target_model)
+        del target_model
+        return draft_model, tokenizer
+
+    def _initialize_draft_from_target(self, draft_model, target_model):
         target_embed_tokens = target_model.get_input_embeddings()
         target_lm_head = target_model.get_output_embeddings()
         assert (target_lm_head is not None) and (target_embed_tokens is not None)
@@ -279,8 +283,6 @@ class BaseTrainer:
             lm_head=target_lm_head,
             freeze=True,
         )
-        del target_model
-        return draft_model, tokenizer
 
     def _build_draft_model(self, *, target_config, model_args):
         raise NotImplementedError
@@ -431,4 +433,3 @@ class BaseTrainer:
         torch.cuda.memory._record_memory_history(enabled=None)
         dist.barrier()
         dist.destroy_process_group()
-
