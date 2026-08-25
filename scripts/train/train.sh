@@ -7,9 +7,10 @@
 
 DEEPSPEC_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-spec_mode=dspark
+spec_mode=${1:-myspec}
+SUFFIX=${2:-}
 LOWER_MODEL_NAME=qwen3_4b
-OUTPUT_DIR=${DEEPSPEC_DIR}/train_log_checkpoints/train_${spec_mode}_${LOWER_MODEL_NAME}_${TIMESTAMP}
+OUTPUT_DIR=${DEEPSPEC_DIR}/train_log_checkpoints/train_${spec_mode}_${LOWER_MODEL_NAME}_${SUFFIX}_${TIMESTAMP}
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
 # export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-4,5,6,7}
 # export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1}
@@ -22,14 +23,16 @@ export BASE_CKPT_DIR=${BASE_CKPT_DIR:-${OUTPUT_DIR}/checkpoints}
 
 target_cache_dir=${target_cache_dir:-${DEEPSPEC_DIR}/.cache/qwen3_4b_target_cache}
 
-# mkdir -p ${OUTPUT_DIR}
+mkdir -p ${OUTPUT_DIR}
+# touch ${OUTPUT_DIR}/train.log
+
 # mkdir -p ${OUTPUT_DIR}/code_config_deepspec
 # cp -r ${DEEPSPEC_DIR}/config ${OUTPUT_DIR}/code_config_deepspec/
 # cp -r ${DEEPSPEC_DIR}/deepspec ${OUTPUT_DIR}/code_config_deepspec/
 
 # MODEL_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/models
 TRAIN_LOG_CHECKPOINTS=${DEEPSPEC_DIR}/train_log_checkpoints
-REUSE_CKPT_DIR=${TRAIN_LOG_CHECKPOINTS}/train_${spec_mode}_qwen3_4b_20260717_013723
+REUSE_CKPT_DIR=${TRAIN_LOG_CHECKPOINTS}/train_${spec_mode}_qwen3_4b_train_extra_embedding_20260818_195531
 if [ -n "${REUSE_CKPT_DIR:-}" ] && [ -d "$REUSE_CKPT_DIR" ]; then
     export BASE_TB_DIR=$REUSE_CKPT_DIR/tensorboard
     export BASE_CKPT_DIR=$REUSE_CKPT_DIR/checkpoints

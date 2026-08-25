@@ -40,9 +40,6 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 spec_mode=myspec
 LOWER_MODEL_NAME=qwen3_4b
 OUTPUT_DIR=${DEEPSPEC_DIR}/train_log_checkpoints/train_${spec_mode}_${LOWER_MODEL_NAME}_${TIMESTAMP}
-export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
-# export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-4,5,6,7}
-# export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1}
 export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
 export MASTER_PORT=${MASTER_PORT:-29500}
 export RANK=${RANK:-0}
@@ -52,7 +49,7 @@ export BASE_CKPT_DIR=${BASE_CKPT_DIR:-${OUTPUT_DIR}/checkpoints}
 
 target_cache_dir=${target_cache_dir:-${DEEPSPEC_DIR}/.cache/qwen3_4b_target_cache}
 
-# mkdir -p ${OUTPUT_DIR}
+mkdir -p ${OUTPUT_DIR}
 # mkdir -p ${OUTPUT_DIR}/code_config_deepspec
 # cp -r ${DEEPSPEC_DIR}/config ${OUTPUT_DIR}/code_config_deepspec/
 # cp -r ${DEEPSPEC_DIR}/deepspec ${OUTPUT_DIR}/code_config_deepspec/

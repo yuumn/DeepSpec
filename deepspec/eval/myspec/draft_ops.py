@@ -33,7 +33,7 @@ def forward_myspec_draft_block(
     ]
     block_hidden = model._forward_backbone(
         target_hidden_states=target_hidden_states,
-        noise_embedding=model.embed_tokens(draft_input_ids),
+        noise_embedding=model.embed_draft_tokens(draft_input_ids),
         position_ids=draft_position_ids,
         attention_mask=None,
         past_key_values=past_key_values_draft,

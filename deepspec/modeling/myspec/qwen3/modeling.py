@@ -260,6 +260,15 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
         self.mask_token_id = config.mask_token_id
         self.num_anchors = int(config.num_anchors)
 
+        # Keep the target-model token embeddings frozen, but let every position
+        # inside a draft block learn a task-specific residual embedding.  A raw
+        # Parameter is used instead of nn.Embedding so the zero initialization is
+        # preserved by post_init and old checkpoints start from the original
+        # mask-token behavior when this parameter is missing.
+        self.draft_slot_embeddings = nn.Parameter(
+            torch.zeros(self.block_size, config.hidden_size)
+        )
+
         # Markov head.
         self.markov_head = build_markov_head(config)
 
@@ -300,6 +309,31 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
 
     def compute_logits(self, hidden_states: torch.Tensor) -> torch.Tensor:
         return self.lm_head(hidden_states)
+
+    def add_draft_slot_embeddings(
+        self,
+        token_embeddings: torch.Tensor,
+    ) -> torch.Tensor:
+        """Add trainable, block-relative residuals to frozen token embeddings."""
+        assert token_embeddings.ndim == 3, (
+            "token_embeddings must be shaped [batch, sequence, hidden], "
+            f"got {tuple(token_embeddings.shape)}."
+        )
+        assert token_embeddings.size(-1) == self.config.hidden_size, (
+            "token_embeddings hidden size must match config.hidden_size, "
+            f"got {token_embeddings.size(-1)} and {self.config.hidden_size}."
+        )
+        slot_ids = torch.arange(
+            token_embeddings.size(1),
+            device=token_embeddings.device,
+        ).remainder(self.block_size)
+        slot_embeddings = self.draft_slot_embeddings.index_select(0, slot_ids)
+        slot_embeddings = slot_embeddings.to(dtype=token_embeddings.dtype).unsqueeze(0)
+        return token_embeddings + slot_embeddings
+
+    def embed_draft_tokens(self, input_ids: torch.Tensor) -> torch.Tensor:
+        """Embed draft input ids with frozen token and trainable slot embeddings."""
+        return self.add_draft_slot_embeddings(self.embed_tokens(input_ids))
 
     def predict_confidence_step(
         self,
@@ -421,6 +455,7 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
             mask_token_id=self.mask_token_id,
             block_size=self.block_size,
         ) # [bsz, num_blocks * block_size, hidden_dim]
+        noise_embedding = self.add_draft_slot_embeddings(noise_embedding)
         context_position_ids = torch.arange(seq_len, device=device).unsqueeze(0).expand(bsz, -1) # [bsz, seq_len]
         draft_position_ids = create_position_ids(anchor_positions, self.block_size) # [bsz, num_blocks * block_size], num_anchors == num_blocks
         full_position_ids = torch.cat([context_position_ids, draft_position_ids], dim=1) # [bsz, seq_len + num_blocks * block_size]

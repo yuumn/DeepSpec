@@ -16,23 +16,25 @@ target_name_or_path=${MODEL_DIR}/Qwen/Qwen3-4B
 # Training writes checkpoints under ~/checkpoints/<project_name>/<exp_name>/step_*.
 # Use step_latest for the most recent checkpoint, or replace it with step_<N>.
 
-# draft_name_or_path=${HOME}/checkpoints/deepspec/myspec_block7_qwen3_4b/step_latest
+# draft_name_or_path=${HOME}/checkpoints/deepspec/dspark_block7_qwen3_4b/step_latest
 # draft_name_or_path=${MODEL_DIR}/deepseek-ai/eagle3_qwen3_4b_ttt7
-checkpoint_dir=${DEEPSEED_DIR}/train_log_checkpoints/train_myspec_qwen3_4b_train_extra_embedding_20260818_195531
-# for epoch in $(seq 1 6); do
+checkpoint_dir=${DEEPSEED_DIR}/train_log_checkpoints/train_qwen3_4b_20260705_174128
+# for epoch in $(seq 5 10); do
 #     STEP=$((epoch * 2616))
 
-for STEP in 1800; do
+# for STEP in 10464; do
     # CHECKPOINT_PATH="${CHECKPOINT_DIR}/checkpoint-${STEP}"
-    draft_name_or_path=${checkpoint_dir}/checkpoints/myspec_block7_qwen3_4b/step_${STEP}
+    # ... existing code ...
+    STEP=1800
+    draft_name_or_path=${checkpoint_dir}/checkpoints/dspark_block7_qwen3_4b/step_${STEP}
 
     output_dir=${checkpoint_dir}/eval
     mkdir -p ${output_dir}
-    # touch ${output_dir}/myspec_epoch_${epoch}.log
+    # touch ${output_dir}/dspark_epoch_${epoch}.log
 
     python eval.py \
         --target_name_or_path ${target_name_or_path} \
         --draft_name_or_path ${draft_name_or_path} \
-        2>&1 | tee -a ${output_dir}/myspec_STEP_${STEP}.log
-        # 2>&1 | tee -a ${output_dir}/myspec_epoch_${epoch}.log
-done
+        2>&1 | tee -a ${output_dir}/dspark_step_${STEP}.log
+        # 2>&1 | tee -a ${output_dir}/dspark_epoch_${epoch}.log
+# done
