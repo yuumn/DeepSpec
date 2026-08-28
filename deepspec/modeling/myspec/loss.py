@@ -14,7 +14,12 @@ def _all_reduce_loss_denominators(
     world_size: int,
 ) -> dict[str, torch.Tensor]:
     denominators = {}
-    for key in ("ce_loss_den", "l1_loss_den", "confidence_loss_den"):
+    for key in (
+        "ce_loss_den",
+        "l1_loss_den",
+        "prefix_accept_loss_den",
+        "confidence_loss_den",
+    ):
         tensor = loss_terms[key].detach().clone()
         if world_size > 1:
             dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
@@ -67,7 +72,7 @@ def _compute_accept_rate_3d(
     draft_probs = torch.softmax(outputs.draft_logits.float(), dim=-1)
     target_probs = torch.softmax(aligned_target_logits.float(), dim=-1)
     accept_rate_3d = 1.0 - 0.5 * (draft_probs - target_probs).abs().sum(dim=-1)
-    return accept_rate_3d.clamp_(0.0, 1.0) # [bsz, num_blocks, block_size]
+    return accept_rate_3d.clamp(0.0, 1.0) # [bsz, num_blocks, block_size]
 
 
 def _compute_local_l1_term(
@@ -87,11 +92,37 @@ def _compute_local_l1_term(
     return l1_loss_num, l1_loss_den
 
 
+def _compute_local_prefix_accept_term(
+    *,
+    outputs: MySpecForwardOutput,
+    accept_rate_3d: Optional[torch.Tensor],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Optimize the expected accepted prefix length of each valid block."""
+
+    zero = outputs.draft_logits.new_zeros((), dtype=torch.float32)
+    if accept_rate_3d is None:
+        return zero, zero
+
+    valid_mask = outputs.eval_mask.to(torch.float32)
+    valid_token_count = valid_mask.sum(dim=-1)
+    valid_blocks = outputs.block_keep_mask & (valid_token_count > 0)
+    valid_block_weights = valid_blocks.to(torch.float32)
+
+    valid_accept_rate = accept_rate_3d * valid_mask
+    expected_accepted = valid_accept_rate.cumprod(dim=-1).sum(dim=-1)
+    normalized_expected = expected_accepted / valid_token_count.clamp_min(1.0)
+    prefix_loss_per_block = 1.0 - normalized_expected
+    prefix_loss_num = (prefix_loss_per_block * valid_block_weights).sum()
+    prefix_loss_den = valid_block_weights.sum()
+    return prefix_loss_num, prefix_loss_den
+
+
 def _collect_local_terms(
     *,
     outputs: MySpecForwardOutput,
     loss_decay_gamma: Optional[float],
     l1_loss_alpha: float,
+    prefix_accept_loss_alpha: float,
 ) -> tuple[dict[str, torch.Tensor], bool]:
     """
     outputs: MySpecForwardOutput(
@@ -140,6 +171,20 @@ def _collect_local_terms(
     else:
         l1_loss_num = zero
         l1_loss_den = zero
+
+    assert prefix_accept_loss_alpha <= 0 or aligned_target_logits is not None, (
+        "aligned_target_logits is required when prefix_accept_loss_alpha > 0."
+    )
+    if prefix_accept_loss_alpha > 0:
+        prefix_accept_loss_num, prefix_accept_loss_den = (
+            _compute_local_prefix_accept_term(
+                outputs=outputs,
+                accept_rate_3d=accept_rate_3d,
+            )
+        )
+    else:
+        prefix_accept_loss_num = zero
+        prefix_accept_loss_den = zero
 
     with torch.no_grad():
         pos_total_counts = eval_mask.to(torch.float32).sum(dim=(0, 1)) # [bsz, num_blocks, block_size]
@@ -195,6 +240,8 @@ def _collect_local_terms(
         "ce_loss_den": ce_loss_den,
         "l1_loss_num": l1_loss_num,
         "l1_loss_den": l1_loss_den,
+        "prefix_accept_loss_num": prefix_accept_loss_num,
+        "prefix_accept_loss_den": prefix_accept_loss_den,
         "confidence_loss_num": confidence_loss_num,
         "confidence_loss_den": confidence_loss_den,
     }
@@ -240,6 +287,7 @@ def _build_loss(
     global_denominators: dict[str, torch.Tensor],
     ce_loss_alpha: float,
     l1_loss_alpha: float,
+    prefix_accept_loss_alpha: float,
     confidence_head_alpha: float,
     has_confidence: bool,
     world_size: int,
@@ -250,6 +298,11 @@ def _build_loss(
         l1_loss = loss_terms["l1_loss_num"] / (
             global_denominators["l1_loss_den"] + 1e-6
         )
+    prefix_accept_loss = ce_loss.new_zeros(())
+    if global_denominators["prefix_accept_loss_den"].item() > 0:
+        prefix_accept_loss = loss_terms["prefix_accept_loss_num"] / (
+            global_denominators["prefix_accept_loss_den"] + 1e-6
+        )
     confidence_loss = ce_loss.new_zeros(())
     if has_confidence:
         confidence_loss = loss_terms["confidence_loss_num"] / (
@@ -258,6 +311,7 @@ def _build_loss(
     return (
         ce_loss_alpha * ce_loss
         + l1_loss_alpha * l1_loss
+        + prefix_accept_loss_alpha * prefix_accept_loss
         + confidence_head_alpha * confidence_loss
     ) * world_size
 
@@ -268,6 +322,7 @@ def compute_myspec_loss(
     loss_decay_gamma: Optional[float],
     ce_loss_alpha: float,
     l1_loss_alpha: float,
+    prefix_accept_loss_alpha: float,
     confidence_head_alpha: float,
 ):
     """
@@ -284,6 +339,7 @@ def compute_myspec_loss(
         outputs=outputs,
         loss_decay_gamma=loss_decay_gamma,
         l1_loss_alpha=float(l1_loss_alpha),
+        prefix_accept_loss_alpha=float(prefix_accept_loss_alpha),
     )
     world_size = dist.get_world_size()
     global_denominators = _all_reduce_loss_denominators(
@@ -292,6 +348,7 @@ def compute_myspec_loss(
     )
     ce_loss_alpha = float(ce_loss_alpha)
     l1_loss_alpha = float(l1_loss_alpha)
+    prefix_accept_loss_alpha = float(prefix_accept_loss_alpha)
     confidence_head_alpha = float(confidence_head_alpha)
 
     local_ce_loss = loss_terms["ce_loss_num"] / (loss_terms["ce_loss_den"] + 1e-6)
@@ -299,6 +356,11 @@ def compute_myspec_loss(
     if global_denominators["l1_loss_den"].item() > 0:
         local_l1_loss = loss_terms["l1_loss_num"] / (
             loss_terms["l1_loss_den"] + 1e-6
+        )
+    local_prefix_accept_loss = local_ce_loss.new_zeros(())
+    if global_denominators["prefix_accept_loss_den"].item() > 0:
+        local_prefix_accept_loss = loss_terms["prefix_accept_loss_num"] / (
+            loss_terms["prefix_accept_loss_den"] + 1e-6
         )
     local_confidence_loss = local_ce_loss.new_zeros(())
     if has_confidence:
@@ -308,6 +370,7 @@ def compute_myspec_loss(
     local_loss = (
         ce_loss_alpha * local_ce_loss
         + l1_loss_alpha * local_l1_loss
+        + prefix_accept_loss_alpha * local_prefix_accept_loss
         + confidence_head_alpha * local_confidence_loss
     )
 
@@ -322,6 +385,13 @@ def compute_myspec_loss(
             "l1_loss",
             loss_terms["l1_loss_num"],
             den=loss_terms["l1_loss_den"],
+            tag="train",
+        )
+    if global_denominators["prefix_accept_loss_den"].item() > 0:
+        add_metric(
+            "prefix_accept_loss",
+            loss_terms["prefix_accept_loss_num"],
+            den=loss_terms["prefix_accept_loss_den"],
             tag="train",
         )
     if has_confidence:
@@ -342,6 +412,7 @@ def compute_myspec_loss(
         global_denominators=global_denominators,
         ce_loss_alpha=ce_loss_alpha,
         l1_loss_alpha=l1_loss_alpha,
+        prefix_accept_loss_alpha=prefix_accept_loss_alpha,
         confidence_head_alpha=confidence_head_alpha,
         has_confidence=has_confidence,
         world_size=world_size,

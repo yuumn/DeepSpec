@@ -18,23 +18,102 @@ class MySpecDraftProposal(DraftProposal):
     confidence_logits: torch.Tensor | None = None
 
 
+def forward_myspec_latent_block(
+    model: MySpecModel,
+    *,
+    anchor_token_ids: torch.Tensor,
+    position_ids: torch.Tensor,
+    past_key_values_cot: DynamicCache,
+    target_hidden_states: torch.Tensor,
+    start: int,
+) -> torch.Tensor:
+    assert anchor_token_ids.ndim == 1
+    cache_len = past_key_values_cot.get_seq_length()
+    assert cache_len + target_hidden_states.size(1) == start
+
+    context_position_ids = position_ids[:, cache_len:start]
+    latent_position_ids = torch.full(
+        (anchor_token_ids.size(0), model.num_latent_tokens),
+        start,
+        dtype=position_ids.dtype,
+        device=position_ids.device,
+    )
+    full_position_ids = torch.cat(
+        [context_position_ids, latent_position_ids],
+        dim=1,
+    )
+    latent_embeddings = model.create_latent_embeddings(anchor_token_ids)
+
+    attention_mask = None
+    if model.latent_attention_type == "causal":
+        attention_mask = torch.ones(
+            (
+                anchor_token_ids.size(0),
+                1,
+                model.num_latent_tokens,
+                start + model.num_latent_tokens,
+            ),
+            dtype=torch.bool,
+            device=position_ids.device,
+        )
+        attention_mask[..., start:] = torch.tril(
+            torch.ones(
+                model.num_latent_tokens,
+                model.num_latent_tokens,
+                dtype=torch.bool,
+                device=position_ids.device,
+            )
+        )
+
+    latent_hidden = model.forward_latent_stage(
+        target_hidden_states=target_hidden_states,
+        latent_embeddings=latent_embeddings,
+        position_ids=full_position_ids,
+        attention_mask=attention_mask,
+        past_key_values=past_key_values_cot,
+        use_cache=True,
+        is_causal=False,
+    )
+    past_key_values_cot.crop(start)
+    return latent_hidden
+
+
 def forward_myspec_draft_block(
     model: MySpecModel,
     *,
-    draft_input_ids: torch.Tensor,
+    latent_hidden_states: torch.Tensor,
     position_ids: torch.Tensor,
     past_key_values_draft: DynamicCache,
     target_hidden_states: torch.Tensor,
     start: int,
     block_size: int,
 ) -> torch.Tensor:
-    draft_position_ids = position_ids[
-        :, past_key_values_draft.get_seq_length() : start + block_size
-    ]
-    block_hidden = model._forward_backbone(
+    cache_len = past_key_values_draft.get_seq_length()
+    assert cache_len + target_hidden_states.size(1) == start
+    assert block_size == model.block_size
+
+    context_position_ids = position_ids[:, cache_len:start]
+    latent_position_ids = torch.full(
+        (target_hidden_states.size(0), model.num_latent_tokens),
+        start,
+        dtype=position_ids.dtype,
+        device=position_ids.device,
+    )
+    draft_position_ids = position_ids[:, start : start + block_size]
+    full_position_ids = torch.cat(
+        [context_position_ids, latent_position_ids, draft_position_ids],
+        dim=1,
+    )
+    draft_embeddings = model.create_draft_embeddings(
+        batch_size=target_hidden_states.size(0),
+        num_blocks=1,
+        device=target_hidden_states.device,
+    ).squeeze(1)
+    block_hidden = model.forward_draft_stage(
         target_hidden_states=target_hidden_states,
-        noise_embedding=model.embed_tokens(draft_input_ids),
-        position_ids=draft_position_ids,
+        latent_hidden_states=latent_hidden_states,
+        draft_embeddings=draft_embeddings,
+        position_ids=full_position_ids,
         attention_mask=None,
         past_key_values=past_key_values_draft,
         use_cache=True,
@@ -44,10 +123,10 @@ def forward_myspec_draft_block(
     return block_hidden
 
 
-def _empty_myspec_proposal(draft_input_ids: torch.Tensor) -> MySpecDraftProposal:
+def _empty_myspec_proposal(anchor_token_ids: torch.Tensor) -> MySpecDraftProposal:
     return MySpecDraftProposal(
         draft_token_count=0,
-        verify_input_ids=draft_input_ids[:, :1],
+        verify_input_ids=anchor_token_ids,
         draft_probs=None,
         confidence_logits=None,
     )
@@ -57,12 +136,12 @@ def _predict_confidence_logits(
     model: MySpecModel,
     *,
     proposal_hidden_states: torch.Tensor,
-    draft_input_ids: torch.Tensor,
+    anchor_token_ids: torch.Tensor,
     sampled_tokens: torch.Tensor,
     block_size: int,
 ) -> torch.Tensor | None:
     prev_token_ids = torch.cat(
-        [draft_input_ids[:, :1], sampled_tokens[:, :-1]],
+        [anchor_token_ids, sampled_tokens[:, :-1]],
         dim=1,
     )
     confidence_pred = model.predict_confidence_step(
@@ -95,18 +174,20 @@ def _confident_prefix_length(
 def build_myspec_proposal(
     model: MySpecModel,
     *,
-    draft_input_ids: torch.Tensor,
+    anchor_token_ids: torch.Tensor,
     block_hidden: torch.Tensor,
     block_size: int,
     temperature: float,
     confidence_threshold: float,
 ) -> MySpecDraftProposal:
-    assert draft_input_ids.size(0) == 1, "build_myspec_proposal requires batch_size=1"
+    assert anchor_token_ids.shape == (1, 1), (
+        "build_myspec_proposal requires anchor_token_ids shaped [1, 1]"
+    )
     proposal_hidden_states = block_hidden[:, :block_size, :]
     base_draft_logits = model.compute_logits(proposal_hidden_states)
     sampled_tokens, draft_logits = model.sample_draft_tokens(
         base_draft_logits,
-        first_prev_token_ids=draft_input_ids[:, 0],
+        first_prev_token_ids=anchor_token_ids[:, 0],
         temperature=temperature,
         hidden_states=proposal_hidden_states,
     )
@@ -117,12 +198,12 @@ def build_myspec_proposal(
         confidence_logits = _predict_confidence_logits(
             model,
             proposal_hidden_states=proposal_hidden_states,
-            draft_input_ids=draft_input_ids,
+            anchor_token_ids=anchor_token_ids,
             sampled_tokens=sampled_tokens,
             block_size=block_size,
         )
         if confidence_logits is None:
-            return _empty_myspec_proposal(draft_input_ids)
+            return _empty_myspec_proposal(anchor_token_ids)
         proposal_draft_tokens = _confident_prefix_length(
             confidence_logits,
             block_size=block_size,
@@ -130,10 +211,10 @@ def build_myspec_proposal(
         )
 
     if proposal_draft_tokens == 0:
-        return _empty_myspec_proposal(draft_input_ids)
+        return _empty_myspec_proposal(anchor_token_ids)
 
     verify_input_ids = torch.cat(
-        [draft_input_ids[:, :1], sampled_tokens[:, :proposal_draft_tokens]],
+        [anchor_token_ids, sampled_tokens[:, :proposal_draft_tokens]],
         dim=1,
     )
     draft_probs = logits_to_probs(

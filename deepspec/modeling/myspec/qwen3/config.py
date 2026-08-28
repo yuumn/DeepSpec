@@ -1,6 +1,6 @@
 import copy
 
-from deepspec.modeling.dspark.common import validate_target_layer_ids
+from deepspec.modeling.myspec.common import validate_target_layer_ids
 
 
 TRAIN_ATTN_IMPLEMENTATION = "flex_attention"
@@ -12,14 +12,23 @@ def build_draft_config(
 ):
     num_target_layers = int(target_config.num_hidden_layers)
     num_draft_layers = int(model_args.num_draft_layers)
-    layer_types = ["full_attention"] * num_draft_layers
+    num_latent_layers = int(model_args.num_latent_layers)
+    num_latent_tokens = int(model_args.num_latent_tokens)
+    assert num_draft_layers >= 1
+    assert num_latent_layers >= 1
+    assert num_latent_tokens >= 1
+    latent_attention_type = str(model_args.latent_attention_type).lower()
+    assert latent_attention_type in {"causal", "bidirectional"}
+    # CoT and draft stages own separate caches and therefore use local layer
+    # indices. The shared config must cover the longer of the two stage stacks.
+    layer_types = ["full_attention"] * max(num_draft_layers, num_latent_layers)
     assert "target_layer_ids" in model_args, "target_layer_ids must be provided."
     target_layer_ids = validate_target_layer_ids(
         model_args.target_layer_ids,
         num_target_layers,
     )
 
-    confidence_head_alpha = float(model_args.confidence_head_alpha)
+    confidence_head_alpha = float(model_args.get("confidence_head_alpha", 0.0))
     assert confidence_head_alpha >= 0.0
     enable_confidence_head = confidence_head_alpha > 0.0
     if enable_confidence_head:
@@ -38,6 +47,9 @@ def build_draft_config(
     draft_config.architectures = ["Qwen3MySpecModel"]
     draft_config.num_target_layers = num_target_layers
     draft_config.num_hidden_layers = num_draft_layers
+    draft_config.num_latent_layers = num_latent_layers
+    draft_config.num_latent_tokens = num_latent_tokens
+    draft_config.latent_attention_type = latent_attention_type
     draft_config.block_size = int(model_args.block_size)
     draft_config.tie_word_embeddings = False
     draft_config.layer_types = layer_types

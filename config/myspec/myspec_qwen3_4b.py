@@ -9,18 +9,22 @@ BASE_CKPT_DIR = os.environ.get("BASE_CKPT_DIR", os.path.expanduser("~/checkpoint
 
 project_name = "deepspec"
 # exp_name = f"myspec_block7_qwen3_4b_{timestamp}"
-exp_name = f"myspec_block7_qwen3_4b"
+exp_name = f"myspec_latent_cot_l2_d3_block7_qwen3_4b"
 seed = 42
 
 model = dict(
     target_model_name_or_path="Qwen/Qwen3-4B",
     block_size=7,
-    num_draft_layers=5,
+    num_draft_layers=3,
+    num_latent_tokens=4,
+    num_latent_layers=2,
+    latent_attention_type="causal",
     target_layer_ids=[1, 9, 17, 25, 33],
     mask_token_id=151669,
     num_anchors=512,
 
     ## markov head
+    # markov_rank=0,
     markov_rank=256,
     markov_head_type='vanilla',
 
@@ -32,6 +36,9 @@ model = dict(
     loss_decay_gamma=4.0,
     ce_loss_alpha=0.1,
     l1_loss_alpha=0.9,
+    # Keep disabled in the architecture-isolation run. Raise this only in a
+    # separate objective ablation so gains are not mixed with the Latent-CoT change.
+    prefix_accept_loss_alpha=0.0,
 )
 
 train = dict(

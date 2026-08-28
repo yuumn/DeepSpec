@@ -19,10 +19,10 @@ target_name_or_path=${MODEL_DIR}/Qwen/Qwen3-4B
 # draft_name_or_path=${HOME}/checkpoints/deepspec/dflash_block7_qwen3_4b/step_latest
 # draft_name_or_path=${MODEL_DIR}/deepseek-ai/eagle3_qwen3_4b_ttt7
 checkpoint_dir=${DEEPSEED_DIR}/train_log_checkpoints/train_dflash_qwen3_4b_20260713_005012
-for epoch in $(seq 8 10); do
-    STEP=$((epoch * 2616))
+# for epoch in $(seq 8 10); do
+#     STEP=$((epoch * 2616))
 
-# for STEP in 10464; do
+for STEP in 2100; do
     # CHECKPOINT_PATH="${CHECKPOINT_DIR}/checkpoint-${STEP}"
     # ... existing code ...
     draft_name_or_path=${checkpoint_dir}/checkpoints/dflash_block7_qwen3_4b/step_${STEP}
@@ -34,5 +34,5 @@ for epoch in $(seq 8 10); do
     python eval.py \
         --target_name_or_path ${target_name_or_path} \
         --draft_name_or_path ${draft_name_or_path} \
-        2>&1 | tee -a ${output_dir}/dflash_epoch_${epoch}.log
+        2>&1 | tee -a ${output_dir}/dflash_STEP_${STEP}.log
 done

@@ -18,6 +18,7 @@ from deepspec.eval.myspec.draft_ops import (
     MySpecDraftProposal,
     build_myspec_proposal,
     forward_myspec_draft_block,
+    forward_myspec_latent_block,
 )
 from deepspec.modeling.myspec.common import extract_context_feature
 from deepspec.modeling.myspec.qwen3 import Qwen3MySpecModel
@@ -88,6 +89,7 @@ class Qwen3MySpecEvaluator(BaseEvaluator):
         **kwargs,
     ) -> SimpleNamespace:
         return SimpleNamespace(
+            past_key_values_cot=DynamicCache(),
             past_key_values_draft=DynamicCache(),
             target_hidden_states=extract_context_feature(
                 initial_output.hidden_states,
@@ -105,16 +107,18 @@ class Qwen3MySpecEvaluator(BaseEvaluator):
         stop_token_ids: list[int] | None = None,
     ) -> DraftProposal:
         model = self.draft_model
-        draft_input_ids = torch.full(
-            (output_ids.size(0), self.max_proposal_tokens),
-            int(model.mask_token_id),
-            dtype=torch.long,
-            device=output_ids.device,
+        anchor_token_ids = output_ids[:, start : start + 1]
+        latent_hidden = forward_myspec_latent_block(
+            model,
+            anchor_token_ids=anchor_token_ids[:, 0],
+            position_ids=position_ids,
+            past_key_values_cot=context.past_key_values_cot,
+            target_hidden_states=context.target_hidden_states,
+            start=start,
         )
-        draft_input_ids[:, 0] = output_ids[:, start]
         block_hidden = forward_myspec_draft_block(
             model,
-            draft_input_ids=draft_input_ids,
+            latent_hidden_states=latent_hidden,
             position_ids=position_ids,
             past_key_values_draft=context.past_key_values_draft,
             target_hidden_states=context.target_hidden_states,
@@ -123,7 +127,7 @@ class Qwen3MySpecEvaluator(BaseEvaluator):
         )
         return build_myspec_proposal(
             model=model,
-            draft_input_ids=draft_input_ids,
+            anchor_token_ids=anchor_token_ids,
             block_hidden=block_hidden,
             block_size=self.max_proposal_tokens,
             temperature=float(self.args.temperature),
@@ -218,4 +222,3 @@ class Qwen3MySpecEvaluator(BaseEvaluator):
         super().print_results()
         if self.confidence_head_recorder is not None:
             self.confidence_head_recorder.print_results()
-

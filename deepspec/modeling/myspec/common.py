@@ -106,6 +106,103 @@ def create_dspark_attention_mask(
     )
 
 
+def create_latent_attention_mask(
+    *,
+    anchor_positions: torch.Tensor,
+    block_keep_mask: torch.Tensor,
+    seq_len: int,
+    num_latent_tokens: int,
+    causal: bool,
+    device: torch.device,
+):
+    """Build the context/latent mask used by the latent reasoning stage.
+
+    Every anchor owns one isolated latent block. A latent query can read target
+    context strictly before its anchor and latent states from the same block.
+    With ``causal=True`` the latent slots form a directed chain; otherwise they
+    behave as a bidirectional latent workspace.
+    """
+
+    def latent_mask_mod(b, h, q_idx, kv_idx):
+        del h
+        q_block_id = q_idx // num_latent_tokens
+        q_slot = q_idx % num_latent_tokens
+        anchor_pos = anchor_positions[b, q_block_id]
+
+        is_context = kv_idx < seq_len
+        mask_context = is_context & (kv_idx < anchor_pos)
+
+        is_latent = kv_idx >= seq_len
+        latent_offset = kv_idx - seq_len
+        kv_block_id = latent_offset // num_latent_tokens
+        kv_slot = latent_offset % num_latent_tokens
+        mask_latent = is_latent & (q_block_id == kv_block_id)
+        if causal:
+            mask_latent = mask_latent & (kv_slot <= q_slot)
+
+        is_valid_block = block_keep_mask[b, q_block_id]
+        return (mask_context | mask_latent) & is_valid_block
+
+    bsz, num_blocks = anchor_positions.shape
+    return create_block_mask(
+        latent_mask_mod,
+        B=bsz,
+        H=None,
+        Q_LEN=num_blocks * num_latent_tokens,
+        KV_LEN=seq_len + num_blocks * num_latent_tokens,
+        device=device,
+    )
+
+
+def create_latent_draft_attention_mask(
+    *,
+    anchor_positions: torch.Tensor,
+    block_keep_mask: torch.Tensor,
+    seq_len: int,
+    num_latent_tokens: int,
+    block_size: int,
+    device: torch.device,
+):
+    """Build the context/latent/draft mask for parallel draft prediction.
+
+    Draft queries can read context before the anchor, every latent state owned
+    by that anchor, and the parallel MASK queries in the same draft block.
+    Blocks belonging to different anchors are kept strictly isolated.
+    """
+
+    latent_len = anchor_positions.shape[1] * num_latent_tokens
+    draft_start = seq_len + latent_len
+
+    def draft_mask_mod(b, h, q_idx, kv_idx):
+        del h
+        q_block_id = q_idx // block_size
+        anchor_pos = anchor_positions[b, q_block_id]
+
+        is_context = kv_idx < seq_len
+        mask_context = is_context & (kv_idx < anchor_pos)
+
+        is_latent = (kv_idx >= seq_len) & (kv_idx < draft_start)
+        kv_latent_block_id = (kv_idx - seq_len) // num_latent_tokens
+        mask_latent = is_latent & (q_block_id == kv_latent_block_id)
+
+        is_draft = kv_idx >= draft_start
+        kv_draft_block_id = (kv_idx - draft_start) // block_size
+        mask_draft = is_draft & (q_block_id == kv_draft_block_id)
+
+        is_valid_block = block_keep_mask[b, q_block_id]
+        return (mask_context | mask_latent | mask_draft) & is_valid_block
+
+    bsz, num_blocks = anchor_positions.shape
+    return create_block_mask(
+        draft_mask_mod,
+        B=bsz,
+        H=None,
+        Q_LEN=num_blocks * block_size,
+        KV_LEN=seq_len + latent_len + num_blocks * block_size,
+        device=device,
+    )
+
+
 def build_anchor_candidate_mask(
     *,
     seq_len: int,
@@ -261,6 +358,24 @@ def create_position_ids(
     )
 
 
+def create_latent_position_ids(
+    anchor_positions: torch.Tensor,
+    num_latent_tokens: int,
+) -> torch.Tensor:
+    """Place virtual latent slots at the anchor's RoPE position.
+
+    Learned latent slot embeddings distinguish slots without shifting the real
+    draft positions away from the target model's token positions.
+    """
+
+    bsz, num_blocks = anchor_positions.shape
+    return anchor_positions.unsqueeze(-1).expand(
+        bsz,
+        num_blocks,
+        num_latent_tokens,
+    ).reshape(bsz, num_blocks * num_latent_tokens)
+
+
 def create_noise_embed(
     embed_tokens: nn.Module,
     input_ids: torch.Tensor,
@@ -300,10 +415,13 @@ __all__ = [
     "extract_context_feature",
     "validate_target_layer_ids",
     "create_dspark_attention_mask",
+    "create_latent_attention_mask",
+    "create_latent_draft_attention_mask",
     "build_anchor_candidate_mask",
     "sample_anchor_positions",
     "build_eval_mask",
     "log_sampler_stats",
     "create_position_ids",
+    "create_latent_position_ids",
     "create_noise_embed",
 ]

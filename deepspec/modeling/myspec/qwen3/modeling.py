@@ -17,17 +17,18 @@ from transformers.models.qwen3.modeling_qwen3 import (
 )
 from typing_extensions import Tuple, Unpack
 
-from deepspec.modeling.dspark.common import (
+from deepspec.modeling.myspec.common import (
     AcceptRatePredictor,
-    DSparkForwardOutput,
+    MySpecForwardOutput,
     build_eval_mask,
-    create_dspark_attention_mask,
-    create_noise_embed,
+    create_latent_attention_mask,
+    create_latent_draft_attention_mask,
+    create_latent_position_ids,
     create_position_ids,
     log_sampler_stats,
     sample_anchor_positions,
 )
-from deepspec.modeling.dspark.markov_head import build_markov_head
+from deepspec.modeling.myspec.markov_head import build_markov_head
 from deepspec.utils.sampling import sample_tokens
 
 
@@ -97,7 +98,7 @@ class Qwen3DSparkAttention(nn.Module):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        target_hidden_states: torch.Tensor,
+        memory_hidden_states: torch.Tensor,
         position_embeddings: tuple[torch.Tensor, torch.Tensor],
         attention_mask: Optional[torch.Tensor],
         past_key_values: Optional[Cache] = None,
@@ -105,22 +106,22 @@ class Qwen3DSparkAttention(nn.Module):
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
         bsz, q_len = hidden_states.shape[:-1]
-        ctx_len = target_hidden_states.shape[1]
+        memory_len = memory_hidden_states.shape[1]
         q = self.q_proj(hidden_states).view(
             bsz, q_len, self.num_attention_heads, self.head_dim
         )
         q = self.q_norm(q).transpose(1, 2)
-        k_ctx = self.k_proj(target_hidden_states)
+        k_memory = self.k_proj(memory_hidden_states)
         # k_noise = self.k_proj(hidden_states)
         k_noise = self.k_proj_noise(hidden_states)
-        v_ctx = self.v_proj(target_hidden_states)
+        v_memory = self.v_proj(memory_hidden_states)
         # v_noise = self.v_proj(hidden_states)
         v_noise = self.v_proj_noise(hidden_states)
-        k = torch.cat([k_ctx, k_noise], dim=1).view(
-            bsz, ctx_len + q_len, self.num_key_value_heads, self.head_dim
+        k = torch.cat([k_memory, k_noise], dim=1).view(
+            bsz, memory_len + q_len, self.num_key_value_heads, self.head_dim
         )
-        v = torch.cat([v_ctx, v_noise], dim=1).view(
-            bsz, ctx_len + q_len, self.num_key_value_heads, self.head_dim
+        v = torch.cat([v_memory, v_noise], dim=1).view(
+            bsz, memory_len + q_len, self.num_key_value_heads, self.head_dim
         )
         k = self.k_norm(k).transpose(1, 2)
         v = v.transpose(1, 2)
@@ -176,7 +177,7 @@ class Qwen3DSparkDecoderLayer(GradientCheckpointingLayer):
 
     def forward(
         self,
-        target_hidden_states: Optional[torch.Tensor] = None,
+        memory_hidden_states: Optional[torch.Tensor] = None,
         hidden_states: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
@@ -193,7 +194,7 @@ class Qwen3DSparkDecoderLayer(GradientCheckpointingLayer):
         hidden_states = self.input_layernorm(hidden_states)
         hidden_states = self.self_attn(
             hidden_states=hidden_states,
-            target_hidden_states=target_hidden_states,
+            memory_hidden_states=memory_hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_values=past_key_value,
@@ -220,6 +221,9 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
             "target_layer_ids",
             "mask_token_id",
             "num_anchors",
+            "num_latent_tokens",
+            "num_latent_layers",
+            "latent_attention_type",
             "enable_confidence_head",
             "markov_rank",
         )
@@ -247,7 +251,14 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
                 for layer_idx in range(config.num_hidden_layers)
             ]
         )
+        self.cot_layers = nn.ModuleList(
+            [
+                Qwen3DSparkDecoderLayer(config, layer_idx)
+                for layer_idx in range(int(config.num_latent_layers))
+            ]
+        )
         self.norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.cot_norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.rotary_emb = Qwen3RotaryEmbedding(config)
         self.fc = nn.Linear(
             len(self.target_layer_ids) * config.hidden_size,
@@ -259,6 +270,20 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
         self.block_size = int(config.block_size)
         self.mask_token_id = config.mask_token_id
         self.num_anchors = int(config.num_anchors)
+        self.num_latent_tokens = int(config.num_latent_tokens)
+        self.num_latent_layers = int(config.num_latent_layers)
+        self.latent_attention_type = str(config.latent_attention_type).lower()
+        assert self.num_latent_tokens >= 1
+        assert self.num_latent_layers >= 1
+        assert self.latent_attention_type in {"causal", "bidirectional"}
+        self.latent_slot_embed = nn.Embedding(
+            self.num_latent_tokens,
+            config.hidden_size,
+        )
+        self.draft_slot_embed = nn.Embedding(
+            self.block_size,
+            config.hidden_size,
+        )
 
         # Markov head.
         self.markov_head = build_markov_head(config)
@@ -300,6 +325,55 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
 
     def compute_logits(self, hidden_states: torch.Tensor) -> torch.Tensor:
         return self.lm_head(hidden_states)
+
+    def create_latent_embeddings(
+        self,
+        anchor_token_ids: torch.Tensor,
+    ) -> torch.Tensor:
+        """Create ``[anchor, MASK, ...]`` embeddings for latent reasoning.
+
+        ``anchor_token_ids`` may be shaped ``[batch]`` or
+        ``[batch, num_blocks]``. The returned tensor appends latent-slot and
+        hidden dimensions to that leading shape.
+        """
+
+        latent_shape = (*anchor_token_ids.shape, self.num_latent_tokens)
+        latent_ids = torch.full(
+            latent_shape,
+            self.mask_token_id,
+            dtype=torch.long,
+            device=anchor_token_ids.device,
+        )
+        latent_ids[..., 0] = anchor_token_ids.long()
+        latent_embeddings = self.embed_tokens(latent_ids)
+        slot_shape = (1,) * anchor_token_ids.ndim + (
+            self.num_latent_tokens,
+            self.config.hidden_size,
+        )
+        return latent_embeddings + self.latent_slot_embed.weight.view(slot_shape)
+
+    def create_draft_embeddings(
+        self,
+        *,
+        batch_size: int,
+        num_blocks: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """Create all-MASK query embeddings for parallel draft prediction."""
+
+        draft_ids = torch.full(
+            (batch_size, num_blocks, self.block_size),
+            self.mask_token_id,
+            dtype=torch.long,
+            device=device,
+        )
+        draft_embeddings = self.embed_tokens(draft_ids)
+        return draft_embeddings + self.draft_slot_embed.weight.view(
+            1,
+            1,
+            self.block_size,
+            self.config.hidden_size,
+        )
 
     def predict_confidence_step(
         self,
@@ -370,6 +444,97 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
         ).squeeze(1)
         return sampled_token_ids, step_logits
 
+    def _project_target_hidden_states(
+        self,
+        target_hidden_states: torch.Tensor,
+    ) -> torch.Tensor:
+        return self.hidden_norm(self.fc(target_hidden_states))
+
+    def _run_stage(
+        self,
+        *,
+        layers: nn.ModuleList,
+        stage_norm: nn.Module,
+        position_ids: torch.LongTensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        query_hidden_states: torch.Tensor,
+        memory_hidden_states: torch.Tensor,
+        past_key_values: Optional[Cache] = None,
+        use_cache: bool = False,
+        **kwargs,
+    ) -> torch.Tensor:
+        hidden_states = query_hidden_states
+        position_embeddings = self.rotary_emb(hidden_states, position_ids)
+        for layer in layers:
+            hidden_states = layer(
+                hidden_states=hidden_states,
+                memory_hidden_states=memory_hidden_states,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_value=past_key_values,
+                use_cache=use_cache,
+                position_embeddings=position_embeddings,
+                **kwargs,
+            )
+        return stage_norm(hidden_states)
+
+    def forward_latent_stage(
+        self,
+        *,
+        target_hidden_states: torch.Tensor,
+        latent_embeddings: torch.Tensor,
+        position_ids: torch.LongTensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        past_key_values: Optional[Cache] = None,
+        use_cache: bool = False,
+        **kwargs,
+    ) -> torch.Tensor:
+        context_hidden_states = self._project_target_hidden_states(
+            target_hidden_states
+        )
+        return self._run_stage(
+            layers=self.cot_layers,
+            stage_norm=self.cot_norm,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            query_hidden_states=latent_embeddings,
+            memory_hidden_states=context_hidden_states,
+            past_key_values=past_key_values,
+            use_cache=use_cache,
+            **kwargs,
+        )
+
+    def forward_draft_stage(
+        self,
+        *,
+        target_hidden_states: torch.Tensor,
+        latent_hidden_states: torch.Tensor,
+        draft_embeddings: torch.Tensor,
+        position_ids: torch.LongTensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        past_key_values: Optional[Cache] = None,
+        use_cache: bool = False,
+        **kwargs,
+    ) -> torch.Tensor:
+        context_hidden_states = self._project_target_hidden_states(
+            target_hidden_states
+        )
+        memory_hidden_states = torch.cat(
+            [context_hidden_states, latent_hidden_states],
+            dim=1,
+        )
+        return self._run_stage(
+            layers=self.layers,
+            stage_norm=self.norm,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            query_hidden_states=draft_embeddings,
+            memory_hidden_states=memory_hidden_states,
+            past_key_values=past_key_values,
+            use_cache=use_cache,
+            **kwargs,
+        )
+
     def _forward_backbone(
         self,
         *,
@@ -381,21 +546,22 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
         use_cache: bool = False,
         **kwargs,
     ) -> torch.Tensor:
-        hidden_states = noise_embedding
-        target_hidden_states = self.hidden_norm(self.fc(target_hidden_states))
-        position_embeddings = self.rotary_emb(hidden_states, position_ids)
-        for layer in self.layers:
-            hidden_states = layer(
-                hidden_states=hidden_states,
-                target_hidden_states=target_hidden_states,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_value=past_key_values,
-                use_cache=use_cache,
-                position_embeddings=position_embeddings,
-                **kwargs,
-            )
-        return self.norm(hidden_states)
+        """Legacy single-stage draft forward kept for checkpoint tooling."""
+
+        context_hidden_states = self._project_target_hidden_states(
+            target_hidden_states
+        )
+        return self._run_stage(
+            layers=self.layers,
+            stage_norm=self.norm,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            query_hidden_states=noise_embedding,
+            memory_hidden_states=context_hidden_states,
+            past_key_values=past_key_values,
+            use_cache=use_cache,
+            **kwargs,
+        )
 
     def forward(
         self,
@@ -403,7 +569,7 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
         target_hidden_states: torch.Tensor, # [bsz, seq_len, 5 * hidden_dim]
         loss_mask: torch.Tensor, # [bsz, seq_len]
         target_last_hidden_states: Optional[torch.Tensor] = None, # [bsz, seq_len, hidden_dim]
-    ) -> DSparkForwardOutput:
+    ) -> MySpecForwardOutput:
         bsz, seq_len = input_ids.shape
         device = input_ids.device
 
@@ -413,32 +579,82 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
             num_anchors=self.num_anchors,
             device=device,
         ) # [bsz, num_anchors], [bsz, num_anchors]
-        noise_embedding = create_noise_embed(
-            self.embed_tokens,
+        num_blocks = anchor_positions.size(1)
+        anchor_token_ids = torch.gather(
             input_ids,
+            1,
             anchor_positions,
+        )
+        anchor_token_ids = torch.where(
             block_keep_mask,
-            mask_token_id=self.mask_token_id,
-            block_size=self.block_size,
-        ) # [bsz, num_blocks * block_size, hidden_dim]
+            anchor_token_ids,
+            torch.full_like(anchor_token_ids, self.mask_token_id),
+        )
+
         context_position_ids = torch.arange(seq_len, device=device).unsqueeze(0).expand(bsz, -1) # [bsz, seq_len]
-        draft_position_ids = create_position_ids(anchor_positions, self.block_size) # [bsz, num_blocks * block_size], num_anchors == num_blocks
-        full_position_ids = torch.cat([context_position_ids, draft_position_ids], dim=1) # [bsz, seq_len + num_blocks * block_size]
-        dspark_attn_mask = create_dspark_attention_mask(
+
+        # Stage 1: turn [anchor, MASK, ...] into a short latent reasoning chain.
+        latent_embeddings_4d = self.create_latent_embeddings(anchor_token_ids)
+        latent_embeddings = latent_embeddings_4d.reshape(
+            bsz,
+            num_blocks * self.num_latent_tokens,
+            -1,
+        )
+        latent_position_ids = create_latent_position_ids(
+            anchor_positions,
+            self.num_latent_tokens,
+        )
+        latent_full_position_ids = torch.cat(
+            [context_position_ids, latent_position_ids],
+            dim=1,
+        )
+        latent_attn_mask = create_latent_attention_mask(
             anchor_positions=anchor_positions,
             block_keep_mask=block_keep_mask,
             seq_len=seq_len,
+            num_latent_tokens=self.num_latent_tokens,
+            causal=self.latent_attention_type == "causal",
+            device=device,
+        )
+        latent_hidden = self.forward_latent_stage(
+            target_hidden_states=target_hidden_states,
+            latent_embeddings=latent_embeddings,
+            position_ids=latent_full_position_ids,
+            attention_mask=latent_attn_mask,
+        ) # [bsz, num_blocks * num_latent_tokens, hidden_dim]
+
+        # Stage 2: all draft positions are MASK queries and read the latent chain.
+        draft_embeddings_4d = self.create_draft_embeddings(
+            batch_size=bsz,
+            num_blocks=num_blocks,
+            device=device,
+        )
+        draft_embeddings = draft_embeddings_4d.reshape(
+            bsz,
+            num_blocks * self.block_size,
+            -1,
+        )
+        draft_position_ids = create_position_ids(anchor_positions, self.block_size) # [bsz, num_blocks * block_size], num_anchors == num_blocks
+        draft_full_position_ids = torch.cat(
+            [context_position_ids, latent_position_ids, draft_position_ids],
+            dim=1,
+        )
+        draft_attn_mask = create_latent_draft_attention_mask(
+            anchor_positions=anchor_positions,
+            block_keep_mask=block_keep_mask,
+            seq_len=seq_len,
+            num_latent_tokens=self.num_latent_tokens,
             block_size=self.block_size,
             device=device,
         )
-        output_hidden = self._forward_backbone(
-            position_ids=full_position_ids,
-            noise_embedding=noise_embedding,
+        output_hidden = self.forward_draft_stage(
+            position_ids=draft_full_position_ids,
+            draft_embeddings=draft_embeddings,
+            latent_hidden_states=latent_hidden,
             target_hidden_states=target_hidden_states,
-            attention_mask=dspark_attn_mask,
+            attention_mask=draft_attn_mask,
         ) # [bsz, num_blocks * block_size, hidden_dim]
 
-        num_blocks = anchor_positions.size(1)
         output_hidden_4d = output_hidden.reshape(bsz, num_blocks, self.block_size, -1) # [bsz, num_blocks, block_size, hidden_dim]
 
         label_offsets = torch.arange(1, self.block_size + 1, device=device).view(
@@ -482,11 +698,6 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
             safe_label_indices=safe_label_indices, # [bsz, num_blocks, block_size], [anchor_pos + 1, anchor_pos + 2, ..., min(anchor_pos + block_size, seq_len - 1)] or [0, 0, ..., 0]
             block_keep_mask=block_keep_mask, # [bsz, num_anchors]
         ) # [bsz, num_blocks, block_size], bool
-        anchor_token_ids = torch.gather(
-            input_ids, # [bsz, seq_len]
-            1,
-            anchor_positions, # [bsz, num_blocks]
-        ) # [bsz, num_blocks]
         prev_token_ids = torch.cat(
             [anchor_token_ids.unsqueeze(-1), target_ids[:, :, :-1]],
             dim=-1,
@@ -527,7 +738,7 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
             else:
                 confidence_pred = self.confidence_head(output_hidden_4d).float()
 
-        return DSparkForwardOutput(
+        return MySpecForwardOutput(
             draft_logits=draft_logits, # [bsz, num_blocks, block_size, vocab_size]
             target_ids=target_ids, # [bsz, num_blocks, block_size], [input_ids[:, anchor_pos + 1], input_ids[:, anchor_pos + 2], ..., input_ids[:, min(anchor_pos + block_size, seq_len - 1)]]
             eval_mask=eval_mask, # [bsz, num_blocks, block_size], bool

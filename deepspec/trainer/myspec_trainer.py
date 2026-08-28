@@ -44,7 +44,12 @@ class Qwen3MySpecTrainer(BaseTrainer):
             loss_decay_gamma=self.args.model.loss_decay_gamma,
             ce_loss_alpha=float(self.args.model.ce_loss_alpha),
             l1_loss_alpha=float(self.args.model.l1_loss_alpha),
-            confidence_head_alpha=float(self.args.model.confidence_head_alpha),
+            prefix_accept_loss_alpha=float(
+                self.args.model.get("prefix_accept_loss_alpha", 0.0)
+            ),
+            confidence_head_alpha=float(
+                self.args.model.get("confidence_head_alpha", 0.0)
+            ),
         )
         return loss
 
