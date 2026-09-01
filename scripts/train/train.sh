@@ -10,7 +10,7 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 spec_mode=${1:-myspec}
 LOWER_MODEL_NAME=qwen3_4b
 echo "spec_mode: $spec_mode"
-OUTPUT_DIR=${DEEPSPEC_DIR}/train_log_checkpoints/train_${spec_mode}_${LOWER_MODEL_NAME}_${TIMESTAMP}
+OUTPUT_DIR=${DEEPSPEC_DIR}/train_log_checkpoints/train_${spec_mode}_${LOWER_MODEL_NAME}_ce-0.1_l1-0.9_${TIMESTAMP}
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
 # export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-4,5,6,7}
 # export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1}
@@ -49,8 +49,8 @@ export TIMESTAMP=${TIMESTAMP}
     --opts "logging.checkpointing_steps=100" \
     --opts "logging.logging_steps=10" \
     --opts "train.sharding_strategy=no_shard" \
-    2>&1 | tee -a ${OUTPUT_DIR}/train.log
     # --opts "logging.resume_checkpoint_dir=${REUSE_CKPT_DIR}/checkpoints/${spec_mode}_block7_qwen3_4b" \
+    2>&1 | tee -a ${OUTPUT_DIR}/train.log
 
     # --opts "logging.tensorboard_dir=${REUSE_CKPT_DIR}/tensorboard/${spec_mode}_block7_qwen3_4b" \
     # no_shard shard_grad_op full_shard hybrid_shard hybrid_shard_zero2/_hybrid_shard_zero2
