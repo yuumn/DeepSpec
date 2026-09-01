@@ -5,15 +5,15 @@
 # Here RANK/WORLD_SIZE mean node_rank/node_count, so WORLD_SIZE=1 is a
 # single-node local run; total GPU workers come from CUDA_VISIBLE_DEVICES.
 
-DEEPSPEC_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec
+# DEEPSPEC_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec
+DEEPSPEC_DIR=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-efficient-llm/yuanerhang/workspace/spec/DeepSpec
+cd $DEEPSPEC_DIR
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 spec_mode=${1:-myspec}
 LOWER_MODEL_NAME=qwen3_4b
 echo "spec_mode: $spec_mode"
 OUTPUT_DIR=${DEEPSPEC_DIR}/train_log_checkpoints/train_${spec_mode}_${LOWER_MODEL_NAME}_ce-0.1_l1-0.9_${TIMESTAMP}
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
-# export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-4,5,6,7}
-# export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1}
 export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
 export MASTER_PORT=${MASTER_PORT:-29500}
 export RANK=${RANK:-0}
@@ -25,17 +25,17 @@ target_cache_dir=${target_cache_dir:-${DEEPSPEC_DIR}/.cache/qwen3_4b_target_cach
 
 mkdir -p ${OUTPUT_DIR}
 # mkdir -p ${OUTPUT_DIR}/code_config_deepspec
-# cp -r ${DEEPSPEC_DIR}/config ${OUTPUT_DIR}/code_config_deepspec/
-# cp -r ${DEEPSPEC_DIR}/deepspec ${OUTPUT_DIR}/code_config_deepspec/
+cp -r ${DEEPSPEC_DIR}/config ${OUTPUT_DIR}/
+cp -r ${DEEPSPEC_DIR}/deepspec ${OUTPUT_DIR}/
 
-# MODEL_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/models
-# TRAIN_LOG_CHECKPOINTS=${DEEPSPEC_DIR}/train_log_checkpoints
-# REUSE_CKPT_DIR=${TRAIN_LOG_CHECKPOINTS}/train_${spec_mode}_qwen3_4b_20260717_013723
-# if [ -n "${REUSE_CKPT_DIR:-}" ] && [ -d "$REUSE_CKPT_DIR" ]; then
-#     export BASE_TB_DIR=$REUSE_CKPT_DIR/tensorboard
-#     export BASE_CKPT_DIR=$REUSE_CKPT_DIR/checkpoints
-#     OUTPUT_DIR=$REUSE_CKPT_DIR
-# fi
+MODEL_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/models
+TRAIN_LOG_CHECKPOINTS=${DEEPSPEC_DIR}/train_log_checkpoints
+REUSE_CKPT_DIR=${TRAIN_LOG_CHECKPOINTS}/train_${spec_mode}_qwen3_4b_20260717_013723
+if [ -n "${REUSE_CKPT_DIR:-}" ] && [ -d "$REUSE_CKPT_DIR" ]; then
+    export BASE_TB_DIR=$REUSE_CKPT_DIR/tensorboard
+    export BASE_CKPT_DIR=$REUSE_CKPT_DIR/checkpoints
+    OUTPUT_DIR=$REUSE_CKPT_DIR
+fi
 # export PROFILE_STEPS=3
 export TIMESTAMP=${TIMESTAMP}
 

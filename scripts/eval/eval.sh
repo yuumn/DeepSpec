@@ -5,7 +5,8 @@ export MASTER_ADDR=127.0.0.1
 export MASTER_PORT=29900
 export RANK=0
 export WORLD_SIZE=1
-DEEPSEED_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec
+# DEEPSEED_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec
+DEEPSEED_DIR=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-efficient-llm/yuanerhang/workspace/spec/DeepSpec
 MODEL_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/models
 
 target_name_or_path=${MODEL_DIR}/Qwen/Qwen3-4B
@@ -16,7 +17,7 @@ STRIDE=${2:-2616}
 START=${3:-1}
 END=${4:-1}
 
-checkpoint_dir="/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec/train_log_checkpoints/${checkpoint_dir}"
+checkpoint_dir="${DEEPSEED_DIR}/train_log_checkpoints/${checkpoint_dir}"
 
 if [ -d "$checkpoint_dir" ]; then
     first_checkpoint_dir=$(find "$checkpoint_dir/checkpoints" -mindepth 1 -maxdepth 1 -type d -print -quit)
