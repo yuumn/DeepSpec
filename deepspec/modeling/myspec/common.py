@@ -10,7 +10,7 @@ from deepspec.utils.metrics import add_metric
 
 @dataclass
 class MySpecForwardOutput:
-    """Outputs for one DSpark training forward.
+    """Outputs for one MySpec training forward.
 
     Shape symbols:
         batch_size: number of samples in the batch
@@ -75,35 +75,89 @@ def validate_target_layer_ids(layer_ids, num_target_layers: int):
     return layer_ids
 
 
-def create_dspark_attention_mask(
+def create_myspec_attention_mask(
     *,
     anchor_positions: torch.Tensor,
     block_keep_mask: torch.Tensor,
     seq_len: int,
     block_size: int,
+    latent_cot_size: int,
     device: torch.device,
 ):
-    def dspark_mask_mod(b, h, q_idx, kv_idx):
+    latent_prefix_size = 1 + int(latent_cot_size)  # current token + latent CoT
+    full_block_size = latent_prefix_size + int(block_size)
+
+    def myspec_mask_mod(b, h, q_idx, kv_idx):
         del h
-        q_block_id = q_idx // block_size
+        q_block_id = q_idx // full_block_size
         anchor_pos = anchor_positions[b, q_block_id]
         is_context = kv_idx < seq_len
         mask_context = is_context & (kv_idx < anchor_pos)
         is_draft = kv_idx >= seq_len
-        kv_block_id = (kv_idx - seq_len) // block_size
-        mask_draft = is_draft & (q_block_id == kv_block_id)
+        kv_block_id = (kv_idx - seq_len) // full_block_size
+        is_same_block = is_draft & (q_block_id == kv_block_id)
+        q_is_latent_prefix = (q_idx % full_block_size) < latent_prefix_size
+        kv_is_latent_prefix = (
+            (kv_idx - seq_len) % full_block_size
+        ) < latent_prefix_size
+        mask_block = is_same_block & (
+            (~q_is_latent_prefix) | kv_is_latent_prefix
+        )
         is_valid_block = block_keep_mask[b, q_block_id]
-        return (mask_context | mask_draft) & is_valid_block
+        return (mask_context | mask_block) & is_valid_block
 
     bsz, num_blocks = anchor_positions.shape
     return create_block_mask(
-        dspark_mask_mod,
+        myspec_mask_mod,
         B=bsz,
         H=None,
-        Q_LEN=num_blocks * block_size,
-        KV_LEN=seq_len + num_blocks * block_size,
+        Q_LEN=num_blocks * full_block_size,
+        KV_LEN=seq_len + num_blocks * full_block_size,
         device=device,
     )
+
+
+def create_myspec_inference_attention_mask(
+    *,
+    batch_size: int,
+    context_len: int,
+    block_size: int,
+    latent_cot_size: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    latent_prefix_size = 1 + int(latent_cot_size)
+    full_block_size = latent_prefix_size + int(block_size)
+    allowed = torch.ones(
+        batch_size,
+        1,
+        full_block_size,
+        context_len + full_block_size,
+        dtype=torch.bool,
+        device=device,
+    )
+    allowed[:, :, :latent_prefix_size, context_len + latent_prefix_size :] = False
+    attention_mask = torch.zeros(allowed.shape, dtype=dtype, device=device)
+    return attention_mask.masked_fill(~allowed, torch.finfo(dtype).min)
+
+
+def create_latent_cot_block_ids(
+    current_token_ids: torch.Tensor,
+    *,
+    latent_cot_token_ids: tuple[int, ...],
+    mask_token_id: int,
+    block_size: int,
+) -> torch.Tensor:
+    suffix_ids = torch.tensor(
+        [*latent_cot_token_ids, *([int(mask_token_id)] * int(block_size))],
+        dtype=current_token_ids.dtype,
+        device=current_token_ids.device,
+    )
+    suffix_ids = suffix_ids.view(*([1] * current_token_ids.ndim), -1).expand(
+        *current_token_ids.shape,
+        -1,
+    )
+    return torch.cat([current_token_ids.unsqueeze(-1), suffix_ids], dim=-1)
 
 
 def build_anchor_candidate_mask(
@@ -261,49 +315,17 @@ def create_position_ids(
     )
 
 
-def create_noise_embed(
-    embed_tokens: nn.Module,
-    input_ids: torch.Tensor,
-    anchor_positions: torch.Tensor,
-    block_keep_mask: torch.Tensor,
-    *,
-    mask_token_id: int,
-    block_size: int,
-) -> torch.Tensor:
-    bsz = input_ids.shape[0]
-    num_blocks = anchor_positions.shape[1]
-    device = input_ids.device
-    noise_ids = torch.full(
-        (bsz, num_blocks * block_size),
-        mask_token_id,
-        dtype=torch.long,
-        device=device,
-    )
-    block_starts = torch.arange(num_blocks, device=device) * block_size
-    block_starts = block_starts.unsqueeze(0).expand(bsz, -1)
-    anchor_tokens = torch.gather(input_ids, 1, anchor_positions)
-    flat_batch_idx = torch.arange(bsz, device=device).unsqueeze(1).expand(
-        bsz,
-        num_blocks,
-    )
-    noise_ids[flat_batch_idx, block_starts] = torch.where(
-        block_keep_mask,
-        anchor_tokens,
-        torch.tensor(mask_token_id, dtype=torch.long, device=device),
-    )
-    return embed_tokens(noise_ids)
-
-
 __all__ = [
     "MySpecForwardOutput",
     "AcceptRatePredictor",
     "extract_context_feature",
     "validate_target_layer_ids",
-    "create_dspark_attention_mask",
+    "create_myspec_attention_mask",
+    "create_myspec_inference_attention_mask",
+    "create_latent_cot_block_ids",
     "build_anchor_candidate_mask",
     "sample_anchor_positions",
     "build_eval_mask",
     "log_sampler_stats",
     "create_position_ids",
-    "create_noise_embed",
 ]

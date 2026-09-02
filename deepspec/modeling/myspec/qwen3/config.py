@@ -33,6 +33,16 @@ def build_draft_config(
         assert "markov_head_type" in model_args, (
             "markov_head_type must be provided when markov_rank > 0."
         )
+    latent_cot_token_ids = [
+        int(token_id) for token_id in model_args.latent_cot_token_ids
+    ]
+    assert len(latent_cot_token_ids) == 4, (
+        "Exactly four latent CoT tokens are required."
+    )
+    assert all(
+        0 <= token_id < target_config.vocab_size
+        for token_id in latent_cot_token_ids
+    )
 
     draft_config = copy.deepcopy(target_config)
     draft_config.architectures = ["Qwen3MySpecModel"]
@@ -43,6 +53,7 @@ def build_draft_config(
     draft_config.layer_types = layer_types
     draft_config._attn_implementation = TRAIN_ATTN_IMPLEMENTATION
     draft_config.mask_token_id = int(model_args.mask_token_id)
+    draft_config.latent_cot_token_ids = latent_cot_token_ids
     draft_config.target_layer_ids = target_layer_ids
     draft_config.num_anchors = int(model_args.num_anchors)
     draft_config.enable_confidence_head = enable_confidence_head

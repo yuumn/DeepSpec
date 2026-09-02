@@ -17,17 +17,17 @@ from transformers.models.qwen3.modeling_qwen3 import (
 )
 from typing_extensions import Tuple, Unpack
 
-from deepspec.modeling.dspark.common import (
+from deepspec.modeling.myspec.common import (
     AcceptRatePredictor,
-    DSparkForwardOutput,
+    MySpecForwardOutput,
     build_eval_mask,
-    create_dspark_attention_mask,
-    create_noise_embed,
+    create_latent_cot_block_ids,
+    create_myspec_attention_mask,
     create_position_ids,
     log_sampler_stats,
     sample_anchor_positions,
 )
-from deepspec.modeling.dspark.markov_head import build_markov_head
+from deepspec.modeling.myspec.markov_head import build_markov_head
 from deepspec.utils.sampling import sample_tokens
 
 
@@ -71,16 +71,16 @@ class Qwen3DSparkAttention(nn.Module):
             self.num_key_value_heads * self.head_dim,
             bias=config.attention_bias,
         )
-        self.k_proj_noise = nn.Linear(
-            config.hidden_size,
-            self.num_key_value_heads * self.head_dim,
-            bias=config.attention_bias,
-        )
-        self.v_proj_noise = nn.Linear(
-            config.hidden_size,
-            self.num_key_value_heads * self.head_dim,
-            bias=config.attention_bias,
-        )
+        # self.k_proj_noise = nn.Linear(
+        #     config.hidden_size,
+        #     self.num_key_value_heads * self.head_dim,
+        #     bias=config.attention_bias,
+        # )
+        # self.v_proj_noise = nn.Linear(
+        #     config.hidden_size,
+        #     self.num_key_value_heads * self.head_dim,
+        #     bias=config.attention_bias,
+        # )
         self.o_proj = nn.Linear(
             self.num_attention_heads * self.head_dim,
             config.hidden_size,
@@ -111,11 +111,11 @@ class Qwen3DSparkAttention(nn.Module):
         )
         q = self.q_norm(q).transpose(1, 2)
         k_ctx = self.k_proj(target_hidden_states)
-        # k_noise = self.k_proj(hidden_states)
-        k_noise = self.k_proj_noise(hidden_states)
+        k_noise = self.k_proj(hidden_states)
+        # k_noise = self.k_proj_noise(hidden_states)
         v_ctx = self.v_proj(target_hidden_states)
-        # v_noise = self.v_proj(hidden_states)
-        v_noise = self.v_proj_noise(hidden_states)
+        v_noise = self.v_proj(hidden_states)
+        # v_noise = self.v_proj_noise(hidden_states)
         k = torch.cat([k_ctx, k_noise], dim=1).view(
             bsz, ctx_len + q_len, self.num_key_value_heads, self.head_dim
         )
@@ -219,6 +219,7 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
         required_fields = (
             "target_layer_ids",
             "mask_token_id",
+            "latent_cot_token_ids",
             "num_anchors",
             "enable_confidence_head",
             "markov_rank",
@@ -258,6 +259,11 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         self.block_size = int(config.block_size)
         self.mask_token_id = config.mask_token_id
+        self.latent_cot_token_ids = tuple(int(x) for x in config.latent_cot_token_ids)
+        assert len(self.latent_cot_token_ids) == 4
+        self.latent_cot_size = len(self.latent_cot_token_ids)
+        self.latent_prefix_size = 1 + self.latent_cot_size
+        self.full_block_size = self.latent_prefix_size + self.block_size
         self.num_anchors = int(config.num_anchors)
 
         # Markov head.
@@ -300,6 +306,14 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
 
     def compute_logits(self, hidden_states: torch.Tensor) -> torch.Tensor:
         return self.lm_head(hidden_states)
+
+    def create_draft_input_ids(self, current_token_ids: torch.Tensor) -> torch.Tensor:
+        return create_latent_cot_block_ids(
+            current_token_ids,
+            latent_cot_token_ids=self.latent_cot_token_ids,
+            mask_token_id=self.mask_token_id,
+            block_size=self.block_size,
+        )
 
     def predict_confidence_step(
         self,
@@ -403,7 +417,7 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
         target_hidden_states: torch.Tensor, # [bsz, seq_len, 5 * hidden_dim]
         loss_mask: torch.Tensor, # [bsz, seq_len]
         target_last_hidden_states: Optional[torch.Tensor] = None, # [bsz, seq_len, hidden_dim]
-    ) -> DSparkForwardOutput:
+    ) -> MySpecForwardOutput:
         bsz, seq_len = input_ids.shape
         device = input_ids.device
 
@@ -413,33 +427,41 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
             num_anchors=self.num_anchors,
             device=device,
         ) # [bsz, num_anchors], [bsz, num_anchors]
-        noise_embedding = create_noise_embed(
-            self.embed_tokens,
+        anchor_token_ids = torch.gather(
             input_ids,
+            1,
             anchor_positions,
-            block_keep_mask,
-            mask_token_id=self.mask_token_id,
-            block_size=self.block_size,
-        ) # [bsz, num_blocks * block_size, hidden_dim]
+        ) # [bsz, num_blocks]
+        draft_input_ids = self.create_draft_input_ids(anchor_token_ids)
+        noise_embedding = self.embed_tokens(draft_input_ids.reshape(bsz, -1))
+        # [bsz, num_blocks * full_block_size, hidden_dim]
         context_position_ids = torch.arange(seq_len, device=device).unsqueeze(0).expand(bsz, -1) # [bsz, seq_len]
-        draft_position_ids = create_position_ids(anchor_positions, self.block_size) # [bsz, num_blocks * block_size], num_anchors == num_blocks
-        full_position_ids = torch.cat([context_position_ids, draft_position_ids], dim=1) # [bsz, seq_len + num_blocks * block_size]
-        dspark_attn_mask = create_dspark_attention_mask(
+        draft_position_ids = create_position_ids(anchor_positions, self.full_block_size)
+        full_position_ids = torch.cat([context_position_ids, draft_position_ids], dim=1)
+        myspec_attn_mask = create_myspec_attention_mask(
             anchor_positions=anchor_positions,
             block_keep_mask=block_keep_mask,
             seq_len=seq_len,
             block_size=self.block_size,
+            latent_cot_size=self.latent_cot_size,
             device=device,
         )
         output_hidden = self._forward_backbone(
             position_ids=full_position_ids,
             noise_embedding=noise_embedding,
             target_hidden_states=target_hidden_states,
-            attention_mask=dspark_attn_mask,
-        ) # [bsz, num_blocks * block_size, hidden_dim]
+            attention_mask=myspec_attn_mask,
+        ) # [bsz, num_blocks * full_block_size, hidden_dim]
 
         num_blocks = anchor_positions.size(1)
-        output_hidden_4d = output_hidden.reshape(bsz, num_blocks, self.block_size, -1) # [bsz, num_blocks, block_size, hidden_dim]
+        output_hidden_4d = output_hidden.reshape(
+            bsz,
+            num_blocks,
+            self.full_block_size,
+            -1,
+        )[:, :, self.latent_prefix_size :, :]
+        # Only the seven MASK slots predict draft tokens. The current token and
+        # four latent-CoT slots are context-only and never contribute to loss.
 
         label_offsets = torch.arange(1, self.block_size + 1, device=device).view(
             1, 1, -1
@@ -482,21 +504,11 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
             safe_label_indices=safe_label_indices, # [bsz, num_blocks, block_size], [anchor_pos + 1, anchor_pos + 2, ..., min(anchor_pos + block_size, seq_len - 1)] or [0, 0, ..., 0]
             block_keep_mask=block_keep_mask, # [bsz, num_anchors]
         ) # [bsz, num_blocks, block_size], bool
-        anchor_token_ids = torch.gather(
-            input_ids, # [bsz, seq_len]
-            1,
-            anchor_positions, # [bsz, num_blocks]
-        ) # [bsz, num_blocks]
         prev_token_ids = torch.cat(
             [anchor_token_ids.unsqueeze(-1), target_ids[:, :, :-1]],
             dim=-1,
         ) # [bsz, num_blocks, block_size], [input_ids[:, anchor_pos], input_ids[:, anchor_pos + 1], input_ids[:, anchor_pos + 2], ..., input_ids[:, min(anchor_pos + block_size, seq_len - 1)]]
-        draft_logits = self.compute_logits(output_hidden).reshape(
-            bsz,
-            num_blocks,
-            self.block_size,
-            -1,
-        ) # [bsz, num_blocks, block_size, vocab_size]
+        draft_logits = self.compute_logits(output_hidden_4d)
         if self.markov_head is not None:
             draft_logits = self.markov_head.apply_block_logits(
                 draft_logits, # [bsz, num_blocks, block_size, vocab_size]
@@ -527,7 +539,7 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
             else:
                 confidence_pred = self.confidence_head(output_hidden_4d).float()
 
-        return DSparkForwardOutput(
+        return MySpecForwardOutput(
             draft_logits=draft_logits, # [bsz, num_blocks, block_size, vocab_size]
             target_ids=target_ids, # [bsz, num_blocks, block_size], [input_ids[:, anchor_pos + 1], input_ids[:, anchor_pos + 2], ..., input_ids[:, min(anchor_pos + block_size, seq_len - 1)]]
             eval_mask=eval_mask, # [bsz, num_blocks, block_size], bool

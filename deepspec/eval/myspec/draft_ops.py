@@ -7,6 +7,7 @@ from transformers import DynamicCache
 
 from deepspec.eval.base_evaluator import DraftProposal
 from deepspec.utils.sampling import logits_to_probs
+from deepspec.modeling.myspec.common import create_myspec_inference_attention_mask
 from deepspec.modeling.myspec.qwen3 import Qwen3MySpecModel
 
 
@@ -22,20 +23,34 @@ def forward_myspec_draft_block(
     model: MySpecModel,
     *,
     draft_input_ids: torch.Tensor,
-    position_ids: torch.Tensor,
     past_key_values_draft: DynamicCache,
     target_hidden_states: torch.Tensor,
     start: int,
     block_size: int,
 ) -> torch.Tensor:
-    draft_position_ids = position_ids[
-        :, past_key_values_draft.get_seq_length() : start + block_size
-    ]
+    assert block_size == model.block_size
+    assert draft_input_ids.size(1) == model.full_block_size
+    past_len = past_key_values_draft.get_seq_length()
+    assert target_hidden_states.size(1) == start - past_len
+    draft_position_ids = torch.arange(
+        past_len,
+        start + draft_input_ids.size(1),
+        device=draft_input_ids.device,
+    ).unsqueeze(0).expand(draft_input_ids.size(0), -1)
+    draft_embedding = model.embed_tokens(draft_input_ids)
+    attention_mask = create_myspec_inference_attention_mask(
+        batch_size=draft_input_ids.size(0),
+        context_len=start,
+        block_size=block_size,
+        latent_cot_size=model.latent_cot_size,
+        device=draft_input_ids.device,
+        dtype=draft_embedding.dtype,
+    )
     block_hidden = model._forward_backbone(
         target_hidden_states=target_hidden_states,
-        noise_embedding=model.embed_tokens(draft_input_ids),
+        noise_embedding=draft_embedding,
         position_ids=draft_position_ids,
-        attention_mask=None,
+        attention_mask=attention_mask,
         past_key_values=past_key_values_draft,
         use_cache=True,
         is_causal=False,
@@ -102,7 +117,9 @@ def build_myspec_proposal(
     confidence_threshold: float,
 ) -> MySpecDraftProposal:
     assert draft_input_ids.size(0) == 1, "build_myspec_proposal requires batch_size=1"
-    proposal_hidden_states = block_hidden[:, :block_size, :]
+    proposal_hidden_states = block_hidden[
+        :, model.latent_prefix_size : model.latent_prefix_size + block_size, :
+    ]
     base_draft_logits = model.compute_logits(proposal_hidden_states)
     sampled_tokens, draft_logits = model.sample_draft_tokens(
         base_draft_logits,

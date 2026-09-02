@@ -105,17 +105,12 @@ class Qwen3MySpecEvaluator(BaseEvaluator):
         stop_token_ids: list[int] | None = None,
     ) -> DraftProposal:
         model = self.draft_model
-        draft_input_ids = torch.full(
-            (output_ids.size(0), self.max_proposal_tokens),
-            int(model.mask_token_id),
-            dtype=torch.long,
-            device=output_ids.device,
+        draft_input_ids = model.create_draft_input_ids(
+            output_ids[:, start],
         )
-        draft_input_ids[:, 0] = output_ids[:, start]
         block_hidden = forward_myspec_draft_block(
             model,
             draft_input_ids=draft_input_ids,
-            position_ids=position_ids,
             past_key_values_draft=context.past_key_values_draft,
             target_hidden_states=context.target_hidden_states,
             start=start,
@@ -218,4 +213,3 @@ class Qwen3MySpecEvaluator(BaseEvaluator):
         super().print_results()
         if self.confidence_head_recorder is not None:
             self.confidence_head_recorder.print_results()
-

@@ -18,15 +18,19 @@ model = dict(
     num_draft_layers=5,
     target_layer_ids=[1, 9, 17, 25, 33],
     mask_token_id=151669,
+    # <think>, latent, latent, </think>
+    latent_cot_token_ids=[151667, 151670, 151670, 151668],
     num_anchors=512,
 
     ## markov head
-    markov_rank=256,
-    markov_head_type='vanilla',
+    markov_rank=0,
+    # markov_rank=256,
+    # markov_head_type='vanilla',
 
-    ## confidence head
-    confidence_head_alpha=1.0,
-    confidence_head_with_markov=True,
+    # ## confidence head
+    confidence_head_alpha=0.0,
+    # confidence_head_alpha=1.0,
+    # confidence_head_with_markov=True,
 
     ## loss
     loss_decay_gamma=4.0,
