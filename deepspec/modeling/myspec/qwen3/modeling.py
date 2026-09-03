@@ -23,7 +23,7 @@ from deepspec.modeling.myspec.common import (
     build_eval_mask,
     create_latent_cot_block_ids,
     create_myspec_attention_mask,
-    create_position_ids,
+    create_myspec_position_ids,
     log_sampler_stats,
     sample_anchor_positions,
 )
@@ -436,7 +436,11 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
         noise_embedding = self.embed_tokens(draft_input_ids.reshape(bsz, -1))
         # [bsz, num_blocks * full_block_size, hidden_dim]
         context_position_ids = torch.arange(seq_len, device=device).unsqueeze(0).expand(bsz, -1) # [bsz, seq_len]
-        draft_position_ids = create_position_ids(anchor_positions, self.full_block_size)
+        draft_position_ids = create_myspec_position_ids(
+            anchor_positions,
+            latent_cot_size=self.latent_cot_size,
+            block_size=self.block_size,
+        )
         full_position_ids = torch.cat([context_position_ids, draft_position_ids], dim=1)
         myspec_attn_mask = create_myspec_attention_mask(
             anchor_positions=anchor_positions,

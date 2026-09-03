@@ -7,7 +7,10 @@ from transformers import DynamicCache
 
 from deepspec.eval.base_evaluator import DraftProposal
 from deepspec.utils.sampling import logits_to_probs
-from deepspec.modeling.myspec.common import create_myspec_inference_attention_mask
+from deepspec.modeling.myspec.common import (
+    create_myspec_inference_attention_mask,
+    create_myspec_inference_position_ids,
+)
 from deepspec.modeling.myspec.qwen3 import Qwen3MySpecModel
 
 
@@ -32,11 +35,14 @@ def forward_myspec_draft_block(
     assert draft_input_ids.size(1) == model.full_block_size
     past_len = past_key_values_draft.get_seq_length()
     assert target_hidden_states.size(1) == start - past_len
-    draft_position_ids = torch.arange(
-        past_len,
-        start + draft_input_ids.size(1),
+    draft_position_ids = create_myspec_inference_position_ids(
+        past_len=past_len,
+        anchor_position=start,
+        batch_size=draft_input_ids.size(0),
+        latent_cot_size=model.latent_cot_size,
+        block_size=block_size,
         device=draft_input_ids.device,
-    ).unsqueeze(0).expand(draft_input_ids.size(0), -1)
+    )
     draft_embedding = model.embed_tokens(draft_input_ids)
     attention_mask = create_myspec_inference_attention_mask(
         batch_size=draft_input_ids.size(0),

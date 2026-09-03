@@ -315,6 +315,80 @@ def create_position_ids(
     )
 
 
+def create_myspec_position_ids(
+    anchor_positions: torch.Tensor,
+    *,
+    latent_cot_size: int,
+    block_size: int,
+) -> torch.Tensor:
+    """Build RoPE positions for ``[x_t, latent..., MASK...]`` blocks.
+
+    The latent tokens and prediction tokens occupy separate virtual position
+    ranges relative to the same anchor token.  For four latent tokens and
+    seven prediction tokens, the offsets are::
+
+        x_t:      0
+        latent:   1, 2, 3, 4
+        MASK:     1, 2, 3, 4, 5, 6, 7
+    """
+    assert anchor_positions.ndim == 2
+    latent_cot_size = int(latent_cot_size)
+    block_size = int(block_size)
+    assert latent_cot_size >= 0
+    assert block_size > 0
+
+    device = anchor_positions.device
+    dtype = anchor_positions.dtype
+    offsets = torch.cat(
+        [
+            torch.zeros(1, dtype=dtype, device=device),
+            torch.arange(1, latent_cot_size + 1, dtype=dtype, device=device),
+            torch.arange(1, block_size + 1, dtype=dtype, device=device),
+        ]
+    ).view(1, 1, -1)
+    bsz, num_blocks = anchor_positions.shape
+    return (anchor_positions.unsqueeze(-1) + offsets).reshape(
+        bsz,
+        num_blocks * offsets.size(-1),
+    )
+
+
+def create_myspec_inference_position_ids(
+    *,
+    past_len: int,
+    anchor_position: int,
+    batch_size: int,
+    latent_cot_size: int,
+    block_size: int,
+    device: torch.device,
+) -> torch.Tensor:
+    """Combine uncached context positions with one MySpec proposal block."""
+    past_len = int(past_len)
+    anchor_position = int(anchor_position)
+    batch_size = int(batch_size)
+    assert 0 <= past_len <= anchor_position
+    assert batch_size > 0
+
+    context_position_ids = torch.arange(
+        past_len,
+        anchor_position,
+        dtype=torch.long,
+        device=device,
+    ).unsqueeze(0).expand(batch_size, -1)
+    anchor_positions = torch.full(
+        (batch_size, 1),
+        anchor_position,
+        dtype=torch.long,
+        device=device,
+    )
+    block_position_ids = create_myspec_position_ids(
+        anchor_positions,
+        latent_cot_size=latent_cot_size,
+        block_size=block_size,
+    )
+    return torch.cat([context_position_ids, block_position_ids], dim=1)
+
+
 __all__ = [
     "MySpecForwardOutput",
     "AcceptRatePredictor",
@@ -328,4 +402,6 @@ __all__ = [
     "build_eval_mask",
     "log_sampler_stats",
     "create_position_ids",
+    "create_myspec_position_ids",
+    "create_myspec_inference_position_ids",
 ]
