@@ -1,6 +1,6 @@
 import copy
 
-from deepspec.modeling.dspark.common import validate_target_layer_ids
+from deepspec.modeling.myspec.common import validate_target_layer_ids
 
 
 TRAIN_ATTN_IMPLEMENTATION = "flex_attention"
@@ -12,6 +12,12 @@ def build_draft_config(
 ):
     num_target_layers = int(target_config.num_hidden_layers)
     num_draft_layers = int(model_args.num_draft_layers)
+    num_latent_layers = int(model_args.num_latent_layers)
+    assert 0 < num_latent_layers < num_draft_layers, (
+        "num_latent_layers must split the draft stack into two non-empty stages: "
+        f"got num_latent_layers={num_latent_layers}, "
+        f"num_draft_layers={num_draft_layers}."
+    )
     layer_types = ["full_attention"] * num_draft_layers
     assert "target_layer_ids" in model_args, "target_layer_ids must be provided."
     target_layer_ids = validate_target_layer_ids(
@@ -48,6 +54,7 @@ def build_draft_config(
     draft_config.architectures = ["Qwen3MySpecModel"]
     draft_config.num_target_layers = num_target_layers
     draft_config.num_hidden_layers = num_draft_layers
+    draft_config.num_latent_layers = num_latent_layers
     draft_config.block_size = int(model_args.block_size)
     draft_config.tie_word_embeddings = False
     draft_config.layer_types = layer_types

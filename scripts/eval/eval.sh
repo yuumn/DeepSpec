@@ -6,7 +6,7 @@ export MASTER_PORT=29900
 export RANK=0
 export WORLD_SIZE=1
 # DEEPSEED_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec
-DEEPSEED_DIR=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-efficient-llm/yuanerhang/workspace/spec/DeepSpec_latent-cot-0901
+DEEPSEED_DIR=/mnt/dolphinfs/ssd_pool/docker/user/hadoop-efficient-llm/yuanerhang/workspace/spec/DeepSpec_0904
 MODEL_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/models
 
 target_name_or_path=${MODEL_DIR}/Qwen/Qwen3-4B

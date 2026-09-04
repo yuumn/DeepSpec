@@ -117,6 +117,45 @@ def create_myspec_attention_mask(
     )
 
 
+def create_myspec_latent_attention_mask(
+    *,
+    anchor_positions: torch.Tensor,
+    block_keep_mask: torch.Tensor,
+    seq_len: int,
+    latent_cot_size: int,
+    device: torch.device,
+):
+    """Build the first-stage mask for ``[anchor, latent CoT...]`` blocks.
+
+    Each block reads target context strictly before its anchor and all prefix
+    states in that block.  Blocks from different anchors stay isolated and
+    MASK states are absent from this stage.
+    """
+    latent_prefix_size = 1 + int(latent_cot_size)
+
+    def latent_mask_mod(b, h, q_idx, kv_idx):
+        del h
+        q_block_id = q_idx // latent_prefix_size
+        anchor_pos = anchor_positions[b, q_block_id]
+        is_context = kv_idx < seq_len
+        mask_context = is_context & (kv_idx < anchor_pos)
+        is_prefix = kv_idx >= seq_len
+        kv_block_id = (kv_idx - seq_len) // latent_prefix_size
+        mask_prefix = is_prefix & (q_block_id == kv_block_id)
+        is_valid_block = block_keep_mask[b, q_block_id]
+        return (mask_context | mask_prefix) & is_valid_block
+
+    bsz, num_blocks = anchor_positions.shape
+    return create_block_mask(
+        latent_mask_mod,
+        B=bsz,
+        H=None,
+        Q_LEN=num_blocks * latent_prefix_size,
+        KV_LEN=seq_len + num_blocks * latent_prefix_size,
+        device=device,
+    )
+
+
 def create_myspec_inference_attention_mask(
     *,
     batch_size: int,
@@ -139,6 +178,26 @@ def create_myspec_inference_attention_mask(
     allowed[:, :, :latent_prefix_size, context_len + latent_prefix_size :] = False
     attention_mask = torch.zeros(allowed.shape, dtype=dtype, device=device)
     return attention_mask.masked_fill(~allowed, torch.finfo(dtype).min)
+
+
+def create_myspec_inference_latent_attention_mask(
+    *,
+    batch_size: int,
+    context_len: int,
+    latent_cot_size: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    """Build the dense first-stage mask used by incremental inference."""
+    latent_prefix_size = 1 + int(latent_cot_size)
+    return torch.zeros(
+        int(batch_size),
+        1,
+        latent_prefix_size,
+        int(context_len) + latent_prefix_size,
+        dtype=dtype,
+        device=device,
+    )
 
 
 def create_latent_cot_block_ids(
@@ -395,7 +454,9 @@ __all__ = [
     "extract_context_feature",
     "validate_target_layer_ids",
     "create_myspec_attention_mask",
+    "create_myspec_latent_attention_mask",
     "create_myspec_inference_attention_mask",
+    "create_myspec_inference_latent_attention_mask",
     "create_latent_cot_block_ids",
     "build_anchor_candidate_mask",
     "sample_anchor_positions",

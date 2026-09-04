@@ -9,6 +9,7 @@ from deepspec.eval.base_evaluator import DraftProposal
 from deepspec.utils.sampling import logits_to_probs
 from deepspec.modeling.myspec.common import (
     create_myspec_inference_attention_mask,
+    create_myspec_inference_latent_attention_mask,
     create_myspec_inference_position_ids,
 )
 from deepspec.modeling.myspec.qwen3 import Qwen3MySpecModel
@@ -52,11 +53,19 @@ def forward_myspec_draft_block(
         device=draft_input_ids.device,
         dtype=draft_embedding.dtype,
     )
+    latent_attention_mask = create_myspec_inference_latent_attention_mask(
+        batch_size=draft_input_ids.size(0),
+        context_len=start,
+        latent_cot_size=model.latent_cot_size,
+        device=draft_input_ids.device,
+        dtype=draft_embedding.dtype,
+    )
     block_hidden = model._forward_backbone(
         target_hidden_states=target_hidden_states,
         noise_embedding=draft_embedding,
         position_ids=draft_position_ids,
         attention_mask=attention_mask,
+        latent_attention_mask=latent_attention_mask,
         past_key_values=past_key_values_draft,
         use_cache=True,
         is_causal=False,

@@ -8,14 +8,17 @@ BASE_TB_DIR = os.environ.get("BASE_TB_DIR", os.path.expanduser("~/tensorboard"))
 BASE_CKPT_DIR = os.environ.get("BASE_CKPT_DIR", os.path.expanduser("~/checkpoints"))
 
 project_name = "deepspec"
-# exp_name = f"myspec_block7_qwen3_4b_{timestamp}"
-exp_name = f"myspec_block7_qwen3_4b"
+# exp_name = f"myspec_latent_cot_l2_d3_block7_qwen3_4b_{timestamp}"
+exp_name = "myspec_latent_cot_l2_d3_block7_qwen3_4b"
 seed = 42
 
 model = dict(
     target_model_name_or_path="Qwen/Qwen3-4B",
     block_size=7,
     num_draft_layers=5,
+    # Run [anchor, 4 latent-CoT tokens] through two layers, then append the
+    # seven MASK queries and run the remaining three layers.
+    num_latent_layers=2,
     target_layer_ids=[1, 9, 17, 25, 33],
     mask_token_id=151669,
     # <think>, latent, latent, </think>

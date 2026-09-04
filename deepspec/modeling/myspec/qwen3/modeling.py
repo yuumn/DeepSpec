@@ -23,6 +23,7 @@ from deepspec.modeling.myspec.common import (
     build_eval_mask,
     create_latent_cot_block_ids,
     create_myspec_attention_mask,
+    create_myspec_latent_attention_mask,
     create_myspec_position_ids,
     log_sampler_stats,
     sample_anchor_positions,
@@ -71,16 +72,43 @@ class Qwen3DSparkAttention(nn.Module):
             self.num_key_value_heads * self.head_dim,
             bias=config.attention_bias,
         )
-        # self.k_proj_noise = nn.Linear(
-        #     config.hidden_size,
-        #     self.num_key_value_heads * self.head_dim,
-        #     bias=config.attention_bias,
-        # )
-        # self.v_proj_noise = nn.Linear(
-        #     config.hidden_size,
-        #     self.num_key_value_heads * self.head_dim,
-        #     bias=config.attention_bias,
-        # )
+        # Target context, anchor, latent-CoT, and MASK states intentionally use
+        # distinct KV projections. No draft state reuses the target projection.
+        self.anchor_k_proj = nn.Linear(
+            config.hidden_size,
+            self.num_key_value_heads * self.head_dim,
+            bias=config.attention_bias,
+        )
+        self.anchor_v_proj = nn.Linear(
+            config.hidden_size,
+            self.num_key_value_heads * self.head_dim,
+            bias=config.attention_bias,
+        )
+        self.latent_k_proj = nn.Linear(
+            config.hidden_size,
+            self.num_key_value_heads * self.head_dim,
+            bias=config.attention_bias,
+        )
+        self.latent_v_proj = nn.Linear(
+            config.hidden_size,
+            self.num_key_value_heads * self.head_dim,
+            bias=config.attention_bias,
+        )
+        self.mask_k_proj = None
+        self.mask_v_proj = None
+        if layer_idx >= int(config.num_latent_layers):
+            self.mask_k_proj = nn.Linear(
+                config.hidden_size,
+                self.num_key_value_heads * self.head_dim,
+                bias=config.attention_bias,
+            )
+            self.mask_v_proj = nn.Linear(
+                config.hidden_size,
+                self.num_key_value_heads * self.head_dim,
+                bias=config.attention_bias,
+            )
+        self.latent_prefix_size = 1 + len(config.latent_cot_token_ids)
+        self.full_block_size = self.latent_prefix_size + int(config.block_size)
         self.o_proj = nn.Linear(
             self.num_attention_heads * self.head_dim,
             config.hidden_size,
@@ -94,10 +122,51 @@ class Qwen3DSparkAttention(nn.Module):
             else None
         )
 
+    def _project_draft_kv(
+        self,
+        hidden_states: torch.Tensor,
+        *,
+        draft_block_size: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Apply token-group-specific KV projections to interleaved blocks."""
+        bsz, q_len, hidden_size = hidden_states.shape
+        draft_block_size = int(draft_block_size)
+        assert draft_block_size in {
+            self.latent_prefix_size,
+            self.full_block_size,
+        }
+        assert q_len % draft_block_size == 0
+        blocks = hidden_states.reshape(
+            bsz,
+            q_len // draft_block_size,
+            draft_block_size,
+            hidden_size,
+        )
+        anchor_states = blocks[:, :, :1, :]
+        latent_states = blocks[:, :, 1 : self.latent_prefix_size, :]
+        key_parts = [
+            self.anchor_k_proj(anchor_states),
+            self.latent_k_proj(latent_states),
+        ]
+        value_parts = [
+            self.anchor_v_proj(anchor_states),
+            self.latent_v_proj(latent_states),
+        ]
+        if draft_block_size == self.full_block_size:
+            assert self.mask_k_proj is not None and self.mask_v_proj is not None
+            mask_states = blocks[:, :, self.latent_prefix_size :, :]
+            key_parts.append(self.mask_k_proj(mask_states))
+            value_parts.append(self.mask_v_proj(mask_states))
+        return (
+            torch.cat(key_parts, dim=2).reshape(bsz, q_len, -1),
+            torch.cat(value_parts, dim=2).reshape(bsz, q_len, -1),
+        )
+
     def forward(
         self,
         hidden_states: torch.Tensor,
         target_hidden_states: torch.Tensor,
+        draft_block_size: int,
         position_embeddings: tuple[torch.Tensor, torch.Tensor],
         attention_mask: Optional[torch.Tensor],
         past_key_values: Optional[Cache] = None,
@@ -111,15 +180,15 @@ class Qwen3DSparkAttention(nn.Module):
         )
         q = self.q_norm(q).transpose(1, 2)
         k_ctx = self.k_proj(target_hidden_states)
-        k_noise = self.k_proj(hidden_states)
-        # k_noise = self.k_proj_noise(hidden_states)
         v_ctx = self.v_proj(target_hidden_states)
-        v_noise = self.v_proj(hidden_states)
-        # v_noise = self.v_proj_noise(hidden_states)
-        k = torch.cat([k_ctx, k_noise], dim=1).view(
+        k_draft, v_draft = self._project_draft_kv(
+            hidden_states,
+            draft_block_size=draft_block_size,
+        )
+        k = torch.cat([k_ctx, k_draft], dim=1).view(
             bsz, ctx_len + q_len, self.num_key_value_heads, self.head_dim
         )
-        v = torch.cat([v_ctx, v_noise], dim=1).view(
+        v = torch.cat([v_ctx, v_draft], dim=1).view(
             bsz, ctx_len + q_len, self.num_key_value_heads, self.head_dim
         )
         k = self.k_norm(k).transpose(1, 2)
@@ -129,15 +198,6 @@ class Qwen3DSparkAttention(nn.Module):
         if past_key_values is not None:
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             k, v = past_key_values.update(k, v, self.layer_idx, cache_kwargs)
-        if (
-            self.config._attn_implementation == "flex_attention"
-            and self.num_key_value_groups > 1
-        ):
-            kv_seq_len = k.shape[-2]
-            k = k.repeat_interleave(self.num_key_value_groups, dim=1)
-            v = v.repeat_interleave(self.num_key_value_groups, dim=1)
-            k = k.reshape(bsz, self.num_attention_heads, kv_seq_len, self.head_dim)
-            v = v.reshape(bsz, self.num_attention_heads, kv_seq_len, self.head_dim)
         attn_fn: Callable = eager_attention_forward
         if self.config._attn_implementation != "eager":
             attn_fn = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
@@ -178,6 +238,7 @@ class Qwen3DSparkDecoderLayer(GradientCheckpointingLayer):
         self,
         target_hidden_states: Optional[torch.Tensor] = None,
         hidden_states: Optional[torch.Tensor] = None,
+        draft_block_size: Optional[int] = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Cache] = None,
@@ -194,6 +255,7 @@ class Qwen3DSparkDecoderLayer(GradientCheckpointingLayer):
         hidden_states = self.self_attn(
             hidden_states=hidden_states,
             target_hidden_states=target_hidden_states,
+            draft_block_size=draft_block_size,
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_values=past_key_value,
@@ -220,6 +282,7 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
             "target_layer_ids",
             "mask_token_id",
             "latent_cot_token_ids",
+            "num_latent_layers",
             "num_anchors",
             "enable_confidence_head",
             "markov_rank",
@@ -264,6 +327,8 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
         self.latent_cot_size = len(self.latent_cot_token_ids)
         self.latent_prefix_size = 1 + self.latent_cot_size
         self.full_block_size = self.latent_prefix_size + self.block_size
+        self.num_latent_layers = int(config.num_latent_layers)
+        assert 0 < self.num_latent_layers < len(self.layers)
         self.num_anchors = int(config.num_anchors)
 
         # Markov head.
@@ -389,19 +454,86 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
         *,
         position_ids: torch.LongTensor,
         attention_mask: Optional[torch.Tensor] = None,
+        latent_attention_mask: Optional[torch.Tensor] = None,
         noise_embedding: Optional[torch.Tensor] = None,
         target_hidden_states: Optional[torch.Tensor] = None,
         past_key_values: Optional[Cache] = None,
         use_cache: bool = False,
         **kwargs,
     ) -> torch.Tensor:
-        hidden_states = noise_embedding
+        assert noise_embedding is not None
+        bsz, query_len, hidden_size = noise_embedding.shape
+        assert query_len % self.full_block_size == 0
+        num_blocks = query_len // self.full_block_size
+        context_position_len = position_ids.size(1) - query_len
+        assert context_position_len >= 0
+
+        input_blocks = noise_embedding.reshape(
+            bsz,
+            num_blocks,
+            self.full_block_size,
+            hidden_size,
+        )
+        latent_hidden_states = input_blocks[
+            :, :, : self.latent_prefix_size, :
+        ].reshape(
+            bsz,
+            num_blocks * self.latent_prefix_size,
+            hidden_size,
+        )
+        mask_embeddings = input_blocks[:, :, self.latent_prefix_size :, :]
+
+        query_position_ids = position_ids[:, context_position_len:].reshape(
+            bsz,
+            num_blocks,
+            self.full_block_size,
+        )
+        latent_query_position_ids = query_position_ids[
+            :, :, : self.latent_prefix_size
+        ].reshape(bsz, num_blocks * self.latent_prefix_size)
+        latent_position_ids = torch.cat(
+            [position_ids[:, :context_position_len], latent_query_position_ids],
+            dim=1,
+        )
+
         target_hidden_states = self.hidden_norm(self.fc(target_hidden_states))
+        latent_position_embeddings = self.rotary_emb(
+            latent_hidden_states,
+            latent_position_ids,
+        )
+        for layer_idx in range(self.num_latent_layers):
+            latent_hidden_states = self.layers[layer_idx](
+                hidden_states=latent_hidden_states,
+                target_hidden_states=target_hidden_states,
+                draft_block_size=self.latent_prefix_size,
+                attention_mask=latent_attention_mask,
+                position_ids=latent_position_ids,
+                past_key_value=past_key_values,
+                use_cache=use_cache,
+                position_embeddings=latent_position_embeddings,
+                **kwargs,
+            )
+
+        # MASK queries join only after the latent stage. Re-interleave each
+        # anchor block before sending all twelve states through the last stage.
+        hidden_states = torch.cat(
+            [
+                latent_hidden_states.reshape(
+                    bsz,
+                    num_blocks,
+                    self.latent_prefix_size,
+                    hidden_size,
+                ),
+                mask_embeddings,
+            ],
+            dim=2,
+        ).reshape(bsz, query_len, hidden_size)
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
-        for layer in self.layers:
-            hidden_states = layer(
+        for layer_idx in range(self.num_latent_layers, len(self.layers)):
+            hidden_states = self.layers[layer_idx](
                 hidden_states=hidden_states,
                 target_hidden_states=target_hidden_states,
+                draft_block_size=self.full_block_size,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
                 past_key_value=past_key_values,
@@ -442,6 +574,13 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
             block_size=self.block_size,
         )
         full_position_ids = torch.cat([context_position_ids, draft_position_ids], dim=1)
+        latent_attn_mask = create_myspec_latent_attention_mask(
+            anchor_positions=anchor_positions,
+            block_keep_mask=block_keep_mask,
+            seq_len=seq_len,
+            latent_cot_size=self.latent_cot_size,
+            device=device,
+        )
         myspec_attn_mask = create_myspec_attention_mask(
             anchor_positions=anchor_positions,
             block_keep_mask=block_keep_mask,
@@ -455,6 +594,7 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
             noise_embedding=noise_embedding,
             target_hidden_states=target_hidden_states,
             attention_mask=myspec_attn_mask,
+            latent_attention_mask=latent_attn_mask,
         ) # [bsz, num_blocks * full_block_size, hidden_dim]
 
         num_blocks = anchor_positions.size(1)
