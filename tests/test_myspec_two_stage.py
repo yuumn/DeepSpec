@@ -224,6 +224,7 @@ class MySpecTwoStageTest(unittest.TestCase):
         class StubBackbone(Qwen3MySpecModel):
             def __init__(self):
                 nn.Module.__init__(self)
+                self.num_anchors = 1
                 self.full_block_size = 12
                 self.latent_prefix_size = 5
                 self.num_latent_layers = 2

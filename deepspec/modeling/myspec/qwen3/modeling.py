@@ -462,11 +462,15 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
         **kwargs,
     ) -> torch.Tensor:
         assert noise_embedding is not None
+        # The draft-query dimension is fixed by the model configuration. Only
+        # the target-context dimension is allowed to remain dynamic.
+        torch._dynamo.mark_static(noise_embedding, 1)
         bsz, query_len, hidden_size = noise_embedding.shape
-        assert query_len % self.full_block_size == 0
-        num_blocks = query_len // self.full_block_size
-        context_position_len = position_ids.size(1) - query_len
-        assert context_position_len >= 0
+        num_blocks = self.num_anchors
+        expected_query_len = num_blocks * self.full_block_size
+        torch._check(query_len == expected_query_len)
+        context_position_len = position_ids.size(1) - expected_query_len
+        torch._check(context_position_len >= 0)
 
         input_blocks = noise_embedding.reshape(
             bsz,
@@ -527,7 +531,7 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
                 mask_embeddings,
             ],
             dim=2,
-        ).reshape(bsz, query_len, hidden_size)
+        ).reshape(bsz, expected_query_len, hidden_size)
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
         for layer_idx in range(self.num_latent_layers, len(self.layers)):
             hidden_states = self.layers[layer_idx](
@@ -559,6 +563,11 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
             num_anchors=self.num_anchors,
             device=device,
         ) # [bsz, num_anchors], [bsz, num_anchors]
+        # Both tensors always have exactly ``num_anchors`` entries along dim 1.
+        # Keep this dimension static under torch.compile(dynamic=True) so it
+        # does not become an unbounded symbolic shape in the attention graph.
+        torch._dynamo.mark_static(anchor_positions, 1)
+        torch._dynamo.mark_static(block_keep_mask, 1)
         anchor_token_ids = torch.gather(
             input_ids,
             1,
