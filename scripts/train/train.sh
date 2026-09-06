@@ -17,19 +17,31 @@ target_cache_dir=${target_cache_dir:-/mnt/dolphinfs/hdd_pool/docker/user/hadoop-
 
 # MODEL_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/models
 TRAIN_LOG_CHECKPOINTS=${DEEPSPEC_DIR}/train_log_checkpoints
-REUSE_CKPT_DIR=${$REUSE_CKPT_DIR:-}
-REUSE_CKPT_DIR=${TRAIN_LOG_CHECKPOINTS}/${REUSE_CKPT_DIR}
+REUSE_CKPT_DIR=${REUSE_CKPT_DIR:-}
+CMD_SUFFIX=()
 
-if [ -n "${REUSE_CKPT_DIR:-}" ] && [ -d "$REUSE_CKPT_DIR" ]; then
+if [ -n "${REUSE_CKPT_DIR:-}" ]; then
+    if [[ "$REUSE_CKPT_INPUT" = /* ]]; then
+        REUSE_CKPT_DIR="$REUSE_CKPT_INPUT"
+    else
+        REUSE_CKPT_DIR="${TRAIN_LOG_CHECKPOINTS}/${REUSE_CKPT_INPUT}"
+    fi
+    if [[ ! -d "$REUSE_CKPT_DIR" ]]; then
+        echo "错误: checkpoints复用目录不存在: $REUSE_CKPT_DIR" >&2
+        exit 1
+    fi
+    first_checkpoint_dir=$(find "$REUSE_CKPT_DIR/checkpoints" -mindepth 1 -maxdepth 1 -type d -print -quit)
+    if [ -z "$first_checkpoint_dir" ]; then
+        echo "错误: 未在 $REUSE_CKPT_DIR 找到 checkpoint 子目录" >&2
+        exit 1
+    fi
     export BASE_TB_DIR=$REUSE_CKPT_DIR/tensorboard
     export BASE_CKPT_DIR=$REUSE_CKPT_DIR/checkpoints
     OUTPUT_DIR=$REUSE_CKPT_DIR
-    first_checkpoint_dir=$(find "$REUSE_CKPT_DIR/checkpoints" -mindepth 1 -maxdepth 1 -type d -print -quit)
-    if [ -z "$first_checkpoint_dir" ]; then
-        echo "错误：未在 $checkpoint_root 找到 checkpoint 子目录" >&2
-        exit 1
-    fi
-    CMD_SUFFIX="--opts logging.resume_checkpoint_dir=${first_checkpoint_dir}"
+    CMD_SUFFIX=(
+        --opts 
+        "logging.resume_checkpoint_dir=${first_checkpoint_dir}"
+    )
 else
     mkdir -p ${OUTPUT_DIR}
     cp -r ${DEEPSPEC_DIR}/config ${OUTPUT_DIR}/
@@ -40,14 +52,15 @@ export TIMESTAMP=${TIMESTAMP}
 
 # nsys profile \
 #     -o /mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec/scripts/train/profile/out_${TIMESTAMP} \
-    python train.py \
+python train.py \
     --config config/${spec_mode}/${spec_mode}_qwen3_4b.py \
     --opts "data.target_cache_path=${target_cache_dir}" \
     --opts "data.num_workers=16" \
     --opts "train.local_batch_size=4" \
     --opts "logging.checkpointing_steps=100" \
     --opts "logging.logging_steps=10" \
-    --opts "train.sharding_strategy=no_shard" ${CMD_SUFFIX:-} \
+    --opts "train.sharding_strategy=no_shard" \
+    "${CMD_SUFFIX[@]}" \
     2>&1 | tee -a ${OUTPUT_DIR}/train.log
 
     # --opts "logging.tensorboard_dir=${REUSE_CKPT_DIR}/tensorboard/${spec_mode}_block7_qwen3_4b" \
