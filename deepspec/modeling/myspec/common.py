@@ -10,7 +10,7 @@ from deepspec.utils.metrics import add_metric
 
 @dataclass
 class MySpecForwardOutput:
-    """Outputs for one DSpark training forward.
+    """Outputs for one MySpec training forward.
 
     Shape symbols:
         batch_size: number of samples in the batch
@@ -83,7 +83,7 @@ def create_myspec_attention_mask(
     block_size: int,
     device: torch.device,
 ):
-    def dspark_mask_mod(b, h, q_idx, kv_idx):
+    def myspec_mask_mod(b, h, q_idx, kv_idx):
         del h
         q_block_id = q_idx // block_size
         anchor_pos = anchor_positions[b, q_block_id]
@@ -97,7 +97,7 @@ def create_myspec_attention_mask(
 
     bsz, num_blocks = anchor_positions.shape
     return create_block_mask(
-        dspark_mask_mod,
+        myspec_mask_mod,
         B=bsz,
         H=None,
         Q_LEN=num_blocks * block_size,

@@ -1,6 +1,6 @@
 import copy
 
-from deepspec.modeling.dspark.common import validate_target_layer_ids
+from deepspec.modeling.myspec.common import validate_target_layer_ids
 
 
 TRAIN_ATTN_IMPLEMENTATION = "flex_attention"
