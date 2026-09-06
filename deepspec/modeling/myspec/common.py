@@ -75,7 +75,7 @@ def validate_target_layer_ids(layer_ids, num_target_layers: int):
     return layer_ids
 
 
-def create_dspark_attention_mask(
+def create_myspec_attention_mask(
     *,
     anchor_positions: torch.Tensor,
     block_keep_mask: torch.Tensor,
@@ -299,7 +299,7 @@ __all__ = [
     "AcceptRatePredictor",
     "extract_context_feature",
     "validate_target_layer_ids",
-    "create_dspark_attention_mask",
+    "create_myspec_attention_mask",
     "build_anchor_candidate_mask",
     "sample_anchor_positions",
     "build_eval_mask",

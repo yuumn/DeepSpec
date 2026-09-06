@@ -17,17 +17,17 @@ from transformers.models.qwen3.modeling_qwen3 import (
 )
 from typing_extensions import Tuple, Unpack
 
-from deepspec.modeling.dspark.common import (
+from deepspec.modeling.myspec.common import (
     AcceptRatePredictor,
-    DSparkForwardOutput,
+    MySpecForwardOutput,
     build_eval_mask,
-    create_dspark_attention_mask,
+    create_myspec_attention_mask,
     create_noise_embed,
     create_position_ids,
     log_sampler_stats,
     sample_anchor_positions,
 )
-from deepspec.modeling.dspark.markov_head import build_markov_head
+from deepspec.modeling.myspec.markov_head import build_markov_head
 from deepspec.utils.sampling import sample_tokens
 
 
@@ -40,7 +40,7 @@ def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
     return q_embed, k_embed
 
 
-class Qwen3DSparkAttention(nn.Module):
+class Qwen3MySpecAttention(nn.Module):
     def __init__(self, config, layer_idx: int):
         super().__init__()
         self.config = config
@@ -163,11 +163,11 @@ class Qwen3DSparkAttention(nn.Module):
         return self.o_proj(attn_output), attn_weights
 
 
-class Qwen3DSparkDecoderLayer(GradientCheckpointingLayer):
+class Qwen3MySpecDecoderLayer(GradientCheckpointingLayer):
     def __init__(self, config, layer_idx: int):
         super().__init__()
         self.hidden_size = config.hidden_size
-        self.self_attn = Qwen3DSparkAttention(config=config, layer_idx=layer_idx)
+        self.self_attn = Qwen3MySpecAttention(config=config, layer_idx=layer_idx)
         self.mlp = Qwen3MLP(config)
         self.input_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = Qwen3RMSNorm(
@@ -211,7 +211,7 @@ class Qwen3DSparkDecoderLayer(GradientCheckpointingLayer):
 
 
 class Qwen3MySpecModel(Qwen3PreTrainedModel):
-    _no_split_modules = ["Qwen3DSparkDecoderLayer"]
+    _no_split_modules = ["Qwen3MySpecDecoderLayer"]
 
     def __init__(self, config) -> None:
         super().__init__(config)
@@ -243,7 +243,7 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
         )
         self.layers = nn.ModuleList(
             [
-                Qwen3DSparkDecoderLayer(config, layer_idx)
+                Qwen3MySpecDecoderLayer(config, layer_idx)
                 for layer_idx in range(config.num_hidden_layers)
             ]
         )
@@ -403,7 +403,7 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
         target_hidden_states: torch.Tensor, # [bsz, seq_len, 5 * hidden_dim]
         loss_mask: torch.Tensor, # [bsz, seq_len]
         target_last_hidden_states: Optional[torch.Tensor] = None, # [bsz, seq_len, hidden_dim]
-    ) -> DSparkForwardOutput:
+    ) -> MySpecForwardOutput:
         bsz, seq_len = input_ids.shape
         device = input_ids.device
 
@@ -424,7 +424,7 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
         context_position_ids = torch.arange(seq_len, device=device).unsqueeze(0).expand(bsz, -1) # [bsz, seq_len]
         draft_position_ids = create_position_ids(anchor_positions, self.block_size) # [bsz, num_blocks * block_size], num_anchors == num_blocks
         full_position_ids = torch.cat([context_position_ids, draft_position_ids], dim=1) # [bsz, seq_len + num_blocks * block_size]
-        dspark_attn_mask = create_dspark_attention_mask(
+        myspec_attn_mask = create_myspec_attention_mask(
             anchor_positions=anchor_positions,
             block_keep_mask=block_keep_mask,
             seq_len=seq_len,
@@ -435,7 +435,7 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
             position_ids=full_position_ids,
             noise_embedding=noise_embedding,
             target_hidden_states=target_hidden_states,
-            attention_mask=dspark_attn_mask,
+            attention_mask=myspec_attn_mask,
         ) # [bsz, num_blocks * block_size, hidden_dim]
 
         num_blocks = anchor_positions.size(1)
@@ -527,7 +527,7 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
             else:
                 confidence_pred = self.confidence_head(output_hidden_4d).float()
 
-        return DSparkForwardOutput(
+        return MySpecForwardOutput(
             draft_logits=draft_logits, # [bsz, num_blocks, block_size, vocab_size]
             target_ids=target_ids, # [bsz, num_blocks, block_size], [input_ids[:, anchor_pos + 1], input_ids[:, anchor_pos + 2], ..., input_ids[:, min(anchor_pos + block_size, seq_len - 1)]]
             eval_mask=eval_mask, # [bsz, num_blocks, block_size], bool
@@ -539,6 +539,6 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
 
 __all__ = [
     "Qwen3MySpecModel",
-    # "Qwen3DSparkAttention",
-    # "Qwen3DSparkDecoderLayer",
+    # "Qwen3MySpecAttention",
+    # "Qwen3MySpecDecoderLayer",
 ]
