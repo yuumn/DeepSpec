@@ -1,5 +1,5 @@
 from deepspec.data import CacheCollator
-# from deepspec.modeling.myspec.gemma4 import Gemma4DSparkModel
+# from deepspec.modeling.myspec.gemma4 import Gemma4MyspecModel
 # from deepspec.modeling.myspec.gemma4.config import (
 #     build_draft_config as build_gemma4_draft_config,
 # )
@@ -30,7 +30,7 @@ class Qwen3MySpecTrainer(BaseTrainer):
             target_last_hidden_states=batch["target_last_hidden_states"],
         )
         """
-        outputs: DSparkForwardOutput(
+        outputs: MyspecForwardOutput(
             draft_logits=draft_logits, # [bsz, num_blocks, block_size, vocab_size]
             target_ids=target_ids, # [bsz, num_blocks, block_size], [input_ids[:, anchor_pos + 1], input_ids[:, anchor_pos + 2], ..., input_ids[:, min(anchor_pos + block_size, seq_len - 1)]]
             eval_mask=eval_mask, # [bsz, num_blocks, block_size], bool
@@ -49,10 +49,10 @@ class Qwen3MySpecTrainer(BaseTrainer):
         return loss
 
 
-# class Gemma4DSparkTrainer(Qwen3DSparkTrainer):
+# class Gemma4MyspecTrainer(Qwen3MyspecTrainer):
 #     def _build_draft_model(self, *, target_config, model_args):
 #         draft_config = build_gemma4_draft_config(
 #             target_config=target_config,
 #             model_args=model_args,
 #         )
-#         return Gemma4DSparkModel(draft_config)
+#         return Gemma4MyspecModel(draft_config)
