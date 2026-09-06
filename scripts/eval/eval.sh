@@ -1,27 +1,52 @@
-# Local launch mirrors the repo's node launcher, not standard torchrun
-# semantics. eval.py spawns one worker per visible GPU by itself.
-# Here RANK/WORLD_SIZE mean node_rank/node_count, so WORLD_SIZE=1 is a
-# single-node local run; total GPU workers come from CUDA_VISIBLE_DEVICES.
-export CUDA_VISIBLE_DEVICES=0,1,2,3
+
+set -o pipefail
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export MASTER_ADDR=127.0.0.1
-export MASTER_PORT=29600
+export MASTER_PORT=29900
 export RANK=0
 export WORLD_SIZE=1
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+DEEPSPEC_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+
 MODEL_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/models
-# Match this to the target model used by the draft checkpoint.
-# target_name_or_path=Qwen/Qwen3-4B
+
 target_name_or_path=${MODEL_DIR}/Qwen/Qwen3-4B
 
-# Training writes checkpoints under ~/checkpoints/<project_name>/<exp_name>/step_*.
-# Use step_latest for the most recent checkpoint, or replace it with step_<N>.
+checkpoint_dir=${1:-}
+STRIDE=${2:-2616}
+START=${3:-1}
+END=${4:-1}
 
-# draft_name_or_path=${HOME}/checkpoints/deepspec/dspark_block7_qwen3_4b/step_latest
-draft_name_or_path=${MODEL_DIR}/deepseek-ai/eagle3_qwen3_4b_ttt7
+checkpoint_dir="${DEEPSPEC_DIR}/train_log_checkpoints/${checkpoint_dir}"
 
-python eval.py \
-    --target_name_or_path ${target_name_or_path} \
-    --draft_name_or_path ${draft_name_or_path} \
-    > /mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec/logs/eval_qwen3_4b/eagle3.log 2>&1
+if [ -d "$checkpoint_dir" ]; then
+    first_checkpoint_dir=$(find "$checkpoint_dir/checkpoints" -mindepth 1 -maxdepth 1 -type d -print -quit)
+    if [ -z "$first_checkpoint_dir" ]; then
+        echo "错误：未在 $checkpoint_root 找到 checkpoint 子目录" >&2
+        exit 1
+    fi
+    # checkpoint_subdir=${checkpoint_dir}/checkpoints/${first_checkpoint_dir}
+    checkpoint_subdir=${first_checkpoint_dir}
+    echo "checkpoint_dir: $checkpoint_dir"
+else
+    echo "错误：checkpoint 目录不存在：$draft_name_or_path" >&2
+    exit 1
+fi
+output_dir=${checkpoint_dir}/eval
+mkdir -p ${output_dir}
 
+for epoch in $(seq $START $END); do
+    STEP=$((epoch * STRIDE))
+    draft_name_or_path=${checkpoint_subdir}/step_${STEP}
 
-
+    suffix="STEP_$STEP"
+    if [ $STRIDE -eq 2616 ]; then
+        suffix="epoch_${epoch}"
+    fi
+    echo "eval $suffix"
+    DEEPSPEC_INFERENCE_EVAL=1 python eval.py \
+        --target_name_or_path ${target_name_or_path} \
+        --draft_name_or_path ${draft_name_or_path} \
+        2>&1 | tee -a ${output_dir}/myspec_${suffix}.log
+done
