@@ -21,6 +21,7 @@ class MySpecDraftProposal(DraftProposal):
 def forward_myspec_draft_block(
     model: MySpecModel,
     *,
+    draft_latent_input_ids: torch.Tensor,
     draft_input_ids: torch.Tensor,
     position_ids: torch.Tensor,
     past_key_values_draft: DynamicCache,
@@ -28,13 +29,36 @@ def forward_myspec_draft_block(
     start: int,
     block_size: int,
 ) -> torch.Tensor:
-    draft_position_ids = position_ids[
-        :, past_key_values_draft.get_seq_length() : start + block_size
-    ]
+    assert past_key_values_draft.get_seq_length() <= start
+    batch_size = position_ids.size(0)
+    cache_len = past_key_values_draft.get_seq_length()
+    cache_position_ids = position_ids[:, cache_len: start]
+    latent_position_ids = position_ids[:, start: start + 1].expand(-1, model.num_latent_tokens)
+    mask_position_ids = position_ids[:, start: start + block_size]
+
+
+    full_latent_position_ids = torch.cat(
+        [
+            cache_position_ids,
+            latent_position_ids,
+        ], dim=1
+    )
+    # draft_position_ids = position_ids[
+    #     :, past_key_values_draft.get_seq_length() : start + block_size
+    # ]
+    full_mask_position_ids = torch.cat(
+        [
+            cache_position_ids,
+            latent_position_ids,
+            mask_position_ids,
+        ], dim=1
+    )
     block_hidden = model._forward_backbone(
         target_hidden_states=target_hidden_states,
+        latent_noise_embedding=model.embed_tokens(draft_latent_input_ids),
+        latent_position_ids=full_latent_position_ids,
         noise_embedding=model.embed_tokens(draft_input_ids),
-        position_ids=draft_position_ids,
+        position_ids=full_mask_position_ids,
         attention_mask=None,
         past_key_values=past_key_values_draft,
         use_cache=True,

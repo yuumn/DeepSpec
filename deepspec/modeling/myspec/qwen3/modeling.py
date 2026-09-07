@@ -21,197 +21,23 @@ from deepspec.modeling.myspec.common import (
     AcceptRatePredictor,
     MySpecForwardOutput,
     build_eval_mask,
-    create_myspec_attention_mask,
+    create_myspec_latent_attention_mask,
+    create_myspec_mask_attention_mask,
     create_noise_embed,
     create_position_ids,
     log_sampler_stats,
     sample_anchor_positions,
+    create_latent_position_ids,
+    create_latent_noise_embed,
 )
+from deepspec.modeling.myspec.qwen3.mask_layer import Qwen3MySpecMaskDecoderLayer
+from deepspec.modeling.myspec.qwen3.latent_layer import Qwen3MySpecLatentDecoderLayer
 from deepspec.modeling.myspec.markov_head import build_markov_head
 from deepspec.utils.sampling import sample_tokens
 
 
-def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
-    cos = cos.unsqueeze(unsqueeze_dim)
-    sin = sin.unsqueeze(unsqueeze_dim)
-    q_len = q.size(-2)
-    q_embed = (q * cos[..., -q_len:, :]) + (rotate_half(q) * sin[..., -q_len:, :])
-    k_embed = (k * cos) + (rotate_half(k) * sin)
-    return q_embed, k_embed
-
-
-class Qwen3MySpecAttention(nn.Module):
-    def __init__(self, config, layer_idx: int):
-        super().__init__()
-        self.config = config
-        self.layer_idx = layer_idx
-        self.head_dim = getattr(
-            config, "head_dim", config.hidden_size // config.num_attention_heads
-        )
-        self.num_attention_heads = config.num_attention_heads
-        self.num_key_value_heads = config.num_key_value_heads
-        self.num_key_value_groups = (
-            self.num_attention_heads // self.num_key_value_heads
-        )
-        self.scaling = self.head_dim**-0.5
-        self.attention_dropout = config.attention_dropout
-        self.is_causal = False
-        self.q_proj = nn.Linear(
-            config.hidden_size,
-            self.num_attention_heads * self.head_dim,
-            bias=config.attention_bias,
-        )
-        self.k_proj = nn.Linear(
-            config.hidden_size,
-            self.num_key_value_heads * self.head_dim,
-            bias=config.attention_bias,
-        )
-        self.v_proj = nn.Linear(
-            config.hidden_size,
-            self.num_key_value_heads * self.head_dim,
-            bias=config.attention_bias,
-        )
-        # self.k_proj_noise = nn.Linear(
-        #     config.hidden_size,
-        #     self.num_key_value_heads * self.head_dim,
-        #     bias=config.attention_bias,
-        # )
-        # self.v_proj_noise = nn.Linear(
-        #     config.hidden_size,
-        #     self.num_key_value_heads * self.head_dim,
-        #     bias=config.attention_bias,
-        # )
-        self.o_proj = nn.Linear(
-            self.num_attention_heads * self.head_dim,
-            config.hidden_size,
-            bias=config.attention_bias,
-        )
-        self.q_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
-        self.k_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
-        self.sliding_window = (
-            config.sliding_window
-            if config.layer_types[layer_idx] == "sliding_attention"
-            else None
-        )
-
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        target_hidden_states: torch.Tensor,
-        position_embeddings: tuple[torch.Tensor, torch.Tensor],
-        attention_mask: Optional[torch.Tensor],
-        past_key_values: Optional[Cache] = None,
-        cache_position: Optional[torch.LongTensor] = None,
-        **kwargs: Unpack[FlashAttentionKwargs],
-    ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
-        bsz, q_len = hidden_states.shape[:-1]
-        ctx_len = target_hidden_states.shape[1]
-        q = self.q_proj(hidden_states).view(
-            bsz, q_len, self.num_attention_heads, self.head_dim
-        )
-        q = self.q_norm(q).transpose(1, 2)
-        k_ctx = self.k_proj(target_hidden_states)
-        k_noise = self.k_proj(hidden_states)
-        # k_noise = self.k_proj_noise(hidden_states)
-        v_ctx = self.v_proj(target_hidden_states)
-        v_noise = self.v_proj(hidden_states)
-        # v_noise = self.v_proj_noise(hidden_states)
-        k = torch.cat([k_ctx, k_noise], dim=1).view(
-            bsz, ctx_len + q_len, self.num_key_value_heads, self.head_dim
-        )
-        v = torch.cat([v_ctx, v_noise], dim=1).view(
-            bsz, ctx_len + q_len, self.num_key_value_heads, self.head_dim
-        )
-        k = self.k_norm(k).transpose(1, 2)
-        v = v.transpose(1, 2)
-        cos, sin = position_embeddings
-        q, k = apply_rotary_pos_emb(q, k, cos, sin)
-        if past_key_values is not None:
-            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            k, v = past_key_values.update(k, v, self.layer_idx, cache_kwargs)
-        if (
-            self.config._attn_implementation == "flex_attention"
-            and self.num_key_value_groups > 1
-        ):
-            kv_seq_len = k.shape[-2]
-            k = k.repeat_interleave(self.num_key_value_groups, dim=1)
-            v = v.repeat_interleave(self.num_key_value_groups, dim=1)
-            k = k.reshape(bsz, self.num_attention_heads, kv_seq_len, self.head_dim)
-            v = v.reshape(bsz, self.num_attention_heads, kv_seq_len, self.head_dim)
-        attn_fn: Callable = eager_attention_forward
-        if self.config._attn_implementation != "eager":
-            attn_fn = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
-        attn_is_causal = bool(kwargs.get("is_causal", False))
-        # The SDPA path may consult module.is_causal when dispatching kernels,
-        # so keep the per-call value mirrored on the module before invoking it.
-        self.is_causal = attn_is_causal
-        kwargs["is_causal"] = attn_is_causal
-        attn_output, attn_weights = attn_fn(
-            self,
-            q,
-            k,
-            v,
-            attention_mask,
-            dropout=0.0 if not self.training else self.attention_dropout,
-            scaling=self.scaling,
-            sliding_window=self.sliding_window,
-            **kwargs,
-        )
-        attn_output = attn_output.reshape(
-            bsz, q_len, self.num_attention_heads * self.head_dim
-        )
-        return self.o_proj(attn_output), attn_weights
-
-
-class Qwen3MySpecDecoderLayer(GradientCheckpointingLayer):
-    def __init__(self, config, layer_idx: int):
-        super().__init__()
-        self.hidden_size = config.hidden_size
-        self.self_attn = Qwen3MySpecAttention(config=config, layer_idx=layer_idx)
-        self.mlp = Qwen3MLP(config)
-        self.input_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = Qwen3RMSNorm(
-            config.hidden_size, eps=config.rms_norm_eps
-        )
-
-    def forward(
-        self,
-        target_hidden_states: Optional[torch.Tensor] = None,
-        hidden_states: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Cache] = None,
-        output_attentions: Optional[bool] = False,
-        use_cache: Optional[bool] = False,
-        cache_position: Optional[torch.LongTensor] = None,
-        position_embeddings: Optional[
-            Tuple[torch.Tensor, torch.Tensor]
-        ] = None,
-        **kwargs: Unpack[FlashAttentionKwargs],
-    ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
-        residual = hidden_states
-        hidden_states = self.input_layernorm(hidden_states)
-        hidden_states = self.self_attn(
-            hidden_states=hidden_states,
-            target_hidden_states=target_hidden_states,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_values=past_key_value,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
-            cache_position=cache_position,
-            position_embeddings=position_embeddings,
-            **kwargs,
-        )[0]
-        hidden_states = residual + hidden_states
-        residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states)
-        return residual + hidden_states
-
-
 class Qwen3MySpecModel(Qwen3PreTrainedModel):
-    _no_split_modules = ["Qwen3MySpecDecoderLayer"]
+    _no_split_modules = ["Qwen3MySpecLatentDecoderLayer", "Qwen3MySpecMaskDecoderLayer"]
 
     def __init__(self, config) -> None:
         super().__init__(config)
@@ -241,9 +67,22 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
             config.hidden_size,
             padding_idx=getattr(config, "pad_token_id", None),
         )
+
+        # Latent Cot
+        self.num_latent_layers = int(config.num_latent_layers)
+        self.num_latent_tokens = int(config.num_latent_tokens)
+        self.latent_token_id = int(config.latent_token_id)
+
+        self.latent_layers = nn.ModuleList(
+            [
+                Qwen3MySpecLatentDecoderLayer(config, layer_idx)
+                for layer_idx in range(self.num_latent_layers)
+            ]
+        )
+
         self.layers = nn.ModuleList(
             [
-                Qwen3MySpecDecoderLayer(config, layer_idx)
+                Qwen3MySpecMaskDecoderLayer(config, layer_idx + self.num_latent_layers, self.num_latent_layers)
                 for layer_idx in range(config.num_hidden_layers)
             ]
         )
@@ -370,9 +209,39 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
         ).squeeze(1)
         return sampled_token_ids, step_logits
 
+    # def _forward_latent_backbone(
+    #     self,
+    #     *,
+    #     position_ids: torch.LongTensor,
+    #     attention_mask: Optional[torch.Tensor] = None,
+    #     noise_embedding: Optional[torch.Tensor] = None,
+    #     target_hidden_states: Optional[torch.Tensor] = None,
+    #     past_key_values: Optional[Cache] = None,
+    #     use_cache: bool = False,
+    #     **kwargs,
+    # ) -> torch.Tensor:
+    #     hidden_states = noise_embedding
+    #     target_hidden_states = self.hidden_norm(self.fc(target_hidden_states))
+    #     position_embeddings = self.rotary_emb(hidden_states, position_ids)
+    #     for layer in self.latent_layers:
+    #         hidden_states = layer(
+    #             hidden_states=hidden_states,
+    #             target_hidden_states=target_hidden_states,
+    #             attention_mask=attention_mask,
+    #             position_ids=position_ids,
+    #             past_key_value=past_key_values,
+    #             use_cache=use_cache,
+    #             position_embeddings=position_embeddings,
+    #             **kwargs,
+    #         )
+    #     return self.norm(hidden_states)
+
     def _forward_backbone(
         self,
         *,
+        latent_noise_embedding: Optional[torch.Tensor] = None,
+        latent_position_ids: torch.LongTensor,
+        latent_attention_mask: Optional[torch.Tensor] = None,
         position_ids: torch.LongTensor,
         attention_mask: Optional[torch.Tensor] = None,
         noise_embedding: Optional[torch.Tensor] = None,
@@ -381,13 +250,38 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
         use_cache: bool = False,
         **kwargs,
     ) -> torch.Tensor:
-        hidden_states = noise_embedding
+        # print(f"latent_noise_embedding: {latent_noise_embedding.shape}", flush=True)
+        # print(f"latent_position_ids: {latent_position_ids.shape}", flush=True)
+        # print(f"latent_attention_mask: {latent_attention_mask.shape}", flush=True)
+        # print(f"position_ids: {position_ids.shape}", flush=True)
+        # print(f"attention_mask: {attention_mask.shape}", flush=True)
+        # print(f"noise_embedding: {noise_embedding.shape}", flush=True)
+        # print(f"target_hidden_states: {target_hidden_states.shape}", flush=True)
+
+        latent_hidden_states = latent_noise_embedding
         target_hidden_states = self.hidden_norm(self.fc(target_hidden_states))
+        # print(f"target_hidden_states: {target_hidden_states.shape}", flush=True)
+        latent_position_embeddings = self.rotary_emb(latent_hidden_states, latent_position_ids)
+        for layer in self.latent_layers:
+            latent_hidden_states = layer(
+                hidden_states=latent_hidden_states,
+                target_hidden_states=target_hidden_states,
+                attention_mask=latent_attention_mask,
+                position_ids=latent_position_ids,
+                past_key_value=past_key_values,
+                use_cache=use_cache,
+                position_embeddings=latent_position_embeddings,
+                **kwargs,
+            )
+        
+        hidden_states = noise_embedding
+        # target_hidden_states = torch.cat([target_hidden_states, latent_hidden_states], dim=1)
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
         for layer in self.layers:
             hidden_states = layer(
                 hidden_states=hidden_states,
                 target_hidden_states=target_hidden_states,
+                latent_hidden_states=latent_hidden_states,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
                 past_key_value=past_key_values,
@@ -396,7 +290,7 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
                 **kwargs,
             )
         return self.norm(hidden_states)
-
+    
     def forward(
         self,
         input_ids: torch.Tensor, # [bsz, seq_len]
@@ -406,6 +300,15 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
     ) -> MySpecForwardOutput:
         bsz, seq_len = input_ids.shape
         device = input_ids.device
+        # print(f"input_ids.shape: {input_ids.shape}", flush=True)
+        # print(f"target_hidden_states.shape: {target_hidden_states.shape}", flush=True)
+        # print(f"loss_mask.shape: {loss_mask.shape}", flush=True)
+        # print(f"target_last_hidden_states.shape: {target_last_hidden_states.shape}", flush=True)
+        # print(f"bsz: {bsz}, seq_len: {seq_len}", flush=True)
+        # print(f"block_size: {self.block_size}", flush=True)
+        # print(f"num_anchors: {self.num_anchors}", flush=True)
+        # print(f"num_latent_tokens: {self.num_latent_tokens}", flush=True)
+        # print(f"self.config._attn_implementation:{self.config._attn_implementation}", flush=True)
 
         anchor_positions, block_keep_mask = sample_anchor_positions(
             seq_len=seq_len,
@@ -413,6 +316,44 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
             num_anchors=self.num_anchors,
             device=device,
         ) # [bsz, num_anchors], [bsz, num_anchors]
+
+        latent_noise_embedding = create_latent_noise_embed(
+            self.embed_tokens,
+            input_ids,
+            anchor_positions,
+            block_keep_mask,
+            latent_token_id=self.latent_token_id,
+            num_latent_tokens=self.num_latent_tokens,
+        ) # [bsz, num_blocks * num_latent_tokens, hidden_dim]
+        
+        context_position_ids = torch.arange(seq_len, device=device).unsqueeze(0).expand(bsz, -1) # [bsz, seq_len]
+
+        latent_position_ids = create_latent_position_ids(
+            anchor_positions,
+            num_latent_tokens=self.num_latent_tokens,
+        ) # [bsz, num_blocks * num_latent_tokens]
+        latent_full_position_ids = torch.cat([context_position_ids, latent_position_ids], dim=1) # [bsz, seq_len + num_blocks * num_latent_tokens]
+        myspec_latent_attn_mask = create_myspec_latent_attention_mask(
+            anchor_positions=anchor_positions,
+            block_keep_mask=block_keep_mask,
+            seq_len=seq_len,
+            block_size=self.num_latent_tokens,
+            device=device,
+        )
+        # print(f"latent_noise_embedding.shape: {latent_noise_embedding.shape}", flush=True)
+        # print(f"latent_position_ids.shape: {latent_position_ids.shape}", flush=True)
+        # print(f"latent_full_position_ids.shape: {latent_full_position_ids.shape}", flush=True)
+        # print(f"myspec_latent_attn_mask.shape: {myspec_latent_attn_mask.shape}", flush=True)
+        # output_latent_hidden = self._forward_latent_backbone(
+        #     position_ids=latent_full_position_ids,
+        #     noise_embedding=latent_noise_embedding,
+        #     target_hidden_states=target_hidden_states,
+        #     attention_mask=myspec_latent_attn_mask,
+        # ) # [bsz, num_blocks * num_latent_tokens, hidden_dim]
+        # print(f"output_latent_hidden.shape: {output_latent_hidden.shape}", flush=True)
+        
+
+
         noise_embedding = create_noise_embed(
             self.embed_tokens,
             input_ids,
@@ -421,25 +362,36 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
             mask_token_id=self.mask_token_id,
             block_size=self.block_size,
         ) # [bsz, num_blocks * block_size, hidden_dim]
-        context_position_ids = torch.arange(seq_len, device=device).unsqueeze(0).expand(bsz, -1) # [bsz, seq_len]
+        # context_position_ids = torch.arange(seq_len, device=device).unsqueeze(0).expand(bsz, -1) # [bsz, seq_len]
         draft_position_ids = create_position_ids(anchor_positions, self.block_size) # [bsz, num_blocks * block_size], num_anchors == num_blocks
-        full_position_ids = torch.cat([context_position_ids, draft_position_ids], dim=1) # [bsz, seq_len + num_blocks * block_size]
-        myspec_attn_mask = create_myspec_attention_mask(
+        # full_position_ids = torch.cat([context_position_ids, draft_position_ids], dim=1) # [bsz, seq_len + num_blocks * block_size]
+        mask_full_position_ids = torch.cat([latent_full_position_ids, draft_position_ids], dim=1) # [bsz, seq_len + num_blocks * block_size]
+        myspec_attn_mask = create_myspec_mask_attention_mask(
             anchor_positions=anchor_positions,
             block_keep_mask=block_keep_mask,
             seq_len=seq_len,
             block_size=self.block_size,
+            num_latent_tokens=self.num_latent_tokens,
             device=device,
         )
         output_hidden = self._forward_backbone(
-            position_ids=full_position_ids,
+            latent_noise_embedding=latent_noise_embedding,
+            latent_position_ids=latent_full_position_ids,
+            latent_attention_mask=myspec_latent_attn_mask,
+            position_ids=mask_full_position_ids,
             noise_embedding=noise_embedding,
             target_hidden_states=target_hidden_states,
             attention_mask=myspec_attn_mask,
         ) # [bsz, num_blocks * block_size, hidden_dim]
-
         num_blocks = anchor_positions.size(1)
         output_hidden_4d = output_hidden.reshape(bsz, num_blocks, self.block_size, -1) # [bsz, num_blocks, block_size, hidden_dim]
+        
+        # print(f"noise_embedding.shape: {noise_embedding.shape}", flush=True)
+        # print(f"myspec_attn_mask.shape: {myspec_attn_mask.shape}", flush=True)
+        # print(f"draft_position_ids.shape: {draft_position_ids.shape}", flush=True)
+        # print(f"mask_full_position_ids.shape: {mask_full_position_ids.shape}", flush=True)
+        # print(f"output_hidden.shape: {output_hidden.shape}", flush=True)
+        # print(f"output_hidden_4d.shape: {output_hidden_4d.shape}", flush=True)
 
         label_offsets = torch.arange(1, self.block_size + 1, device=device).view(
             1, 1, -1

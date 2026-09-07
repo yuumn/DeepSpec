@@ -53,6 +53,13 @@ def build_draft_config(
     draft_config.markov_rank = markov_rank
     if markov_rank > 0:
         draft_config.markov_head_type = str(model_args.markov_head_type)
+
+    # Latent CoT
+    draft_config.num_latent_layers = int(model_args.num_latent_layers)
+    draft_config.num_latent_tokens = int(model_args.num_latent_tokens)
+    draft_config.latent_token_id = int(model_args.latent_token_id)
+    
+
     return draft_config
 
 

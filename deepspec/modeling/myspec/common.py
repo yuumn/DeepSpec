@@ -74,8 +74,7 @@ def validate_target_layer_ids(layer_ids, num_target_layers: int):
         previous = layer_id
     return layer_ids
 
-
-def create_myspec_attention_mask(
+def create_myspec_latent_attention_mask(
     *,
     anchor_positions: torch.Tensor,
     block_keep_mask: torch.Tensor,
@@ -102,6 +101,47 @@ def create_myspec_attention_mask(
         H=None,
         Q_LEN=num_blocks * block_size,
         KV_LEN=seq_len + num_blocks * block_size,
+        device=device,
+    )
+
+def create_myspec_mask_attention_mask(
+    *,
+    anchor_positions: torch.Tensor,
+    block_keep_mask: torch.Tensor,
+    seq_len: int,
+    block_size: int,
+    num_latent_tokens: int,
+    device: torch.device,
+):
+    bsz, num_blocks = anchor_positions.shape
+    latent_end = seq_len + num_blocks * num_latent_tokens
+
+    def myspec_mask_mod(b, h, q_idx, kv_idx):
+        del h
+        q_block_id = q_idx // block_size
+        anchor_pos = anchor_positions[b, q_block_id]
+
+        is_context = kv_idx < seq_len
+        mask_context = is_context & (kv_idx < anchor_pos)
+
+        is_latent = (kv_idx >= seq_len) & (kv_idx < latent_end)
+        latent_block_id = (kv_idx - seq_len) // num_latent_tokens
+        mask_latent = is_latent & (q_block_id == latent_block_id)
+
+        is_draft = kv_idx >= latent_end
+        kv_block_id = (kv_idx - latent_end) // block_size
+        mask_draft = is_draft & (q_block_id == kv_block_id)
+
+        is_valid_block = block_keep_mask[b, q_block_id]
+
+        return (mask_context | mask_latent | mask_draft) & is_valid_block
+
+    return create_block_mask(
+        myspec_mask_mod,
+        B=bsz,
+        H=None,
+        Q_LEN=num_blocks * block_size,
+        KV_LEN=seq_len + num_blocks * num_latent_tokens + num_blocks * block_size,
         device=device,
     )
 
@@ -260,6 +300,18 @@ def create_position_ids(
         num_blocks * block_size,
     )
 
+def create_latent_position_ids(
+    anchor_positions: torch.Tensor, # [bsz, num_anchors]
+    num_latent_tokens: int,
+) -> torch.Tensor:
+    bsz, num_blocks = anchor_positions.shape
+    device = anchor_positions.device
+    # offsets = torch.arange(num_latent_tokens, device=device).view(1, 1, -1)
+    offsets = torch.zeros(num_latent_tokens, device=device).view(1, 1, -1)
+    return (anchor_positions.unsqueeze(-1) + offsets).view(
+        bsz,
+        num_blocks * num_latent_tokens,
+    )
 
 def create_noise_embed(
     embed_tokens: nn.Module,
@@ -293,17 +345,52 @@ def create_noise_embed(
     )
     return embed_tokens(noise_ids)
 
+def create_latent_noise_embed(
+    embed_tokens: nn.Module,
+    input_ids: torch.Tensor,
+    anchor_positions: torch.Tensor,
+    block_keep_mask: torch.Tensor,
+    *,
+    latent_token_id: int,
+    num_latent_tokens: int,
+) -> torch.Tensor:
+    bsz = input_ids.shape[0]
+    num_blocks = anchor_positions.shape[1]
+    device = input_ids.device
+    latent_noise_ids = torch.full(
+        (bsz, num_blocks * num_latent_tokens),
+        latent_token_id,
+        dtype=torch.long,
+        device=device,
+    )
+    block_starts = torch.arange(num_blocks, device=device) * num_latent_tokens
+    block_starts = block_starts.unsqueeze(0).expand(bsz, -1)
+    anchor_tokens = torch.gather(input_ids, 1, anchor_positions)
+    flat_batch_idx = torch.arange(bsz, device=device).unsqueeze(1).expand(
+        bsz,
+        num_blocks,
+    )
+    latent_noise_ids[flat_batch_idx, block_starts] = torch.where(
+        block_keep_mask,
+        anchor_tokens,
+        torch.tensor(latent_token_id, dtype=torch.long, device=device),
+    )
+    return embed_tokens(latent_noise_ids)
 
 __all__ = [
     "MySpecForwardOutput",
     "AcceptRatePredictor",
     "extract_context_feature",
     "validate_target_layer_ids",
-    "create_myspec_attention_mask",
+    # "create_myspec_attention_mask",
+    "create_myspec_latent_attention_mask",
+    "create_myspec_mask_attention_mask",
     "build_anchor_candidate_mask",
     "sample_anchor_positions",
     "build_eval_mask",
     "log_sampler_stats",
     "create_position_ids",
     "create_noise_embed",
+    "create_latent_position_ids",
+    "create_latent_noise_embed",
 ]
