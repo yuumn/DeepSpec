@@ -57,6 +57,26 @@ class Qwen3MySpecMaskAttention(nn.Module):
             self.num_key_value_heads * self.head_dim,
             bias=config.attention_bias,
         )
+        self.k_proj_mask = nn.Linear(
+            config.hidden_size,
+            self.num_key_value_heads * self.head_dim,
+            bias=config.attention_bias,
+        )
+        self.v_proj_mask = nn.Linear(
+            config.hidden_size,
+            self.num_key_value_heads * self.head_dim,
+            bias=config.attention_bias,
+        )
+        self.k_proj_latent = nn.Linear(
+            config.hidden_size,
+            self.num_key_value_heads * self.head_dim,
+            bias=config.attention_bias,
+        )
+        self.v_proj_latent = nn.Linear(
+            config.hidden_size,
+            self.num_key_value_heads * self.head_dim,
+            bias=config.attention_bias,
+        )
         self.o_proj = nn.Linear(
             self.num_attention_heads * self.head_dim,
             config.hidden_size,
@@ -88,13 +108,13 @@ class Qwen3MySpecMaskAttention(nn.Module):
         )
         q = self.q_norm(q).transpose(1, 2)
         k_ctx = self.k_proj(target_hidden_states)
-        k_noise = self.k_proj(hidden_states)
+        k_noise = self.k_proj_mask(hidden_states)
         v_ctx = self.v_proj(target_hidden_states)
-        v_noise = self.v_proj(hidden_states)
+        v_noise = self.v_proj_mask(hidden_states)
 
         latent_len = latent_hidden_states.shape[1]
-        k_latent = self.k_proj(latent_hidden_states)
-        v_latent = self.v_proj(latent_hidden_states)
+        k_latent = self.k_proj_latent(latent_hidden_states)
+        v_latent = self.v_proj_latent(latent_hidden_states)
         k = torch.cat([k_ctx, k_latent, k_noise], dim=1).view(
             bsz, ctx_len + latent_len + q_len, self.num_key_value_heads, self.head_dim
         )
