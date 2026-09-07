@@ -56,16 +56,16 @@ class Qwen3MySpecAttention(nn.Module):
             self.num_key_value_heads * self.head_dim,
             bias=config.attention_bias,
         )
-        # self.k_proj_noise = nn.Linear(
-        #     config.hidden_size,
-        #     self.num_key_value_heads * self.head_dim,
-        #     bias=config.attention_bias,
-        # )
-        # self.v_proj_noise = nn.Linear(
-        #     config.hidden_size,
-        #     self.num_key_value_heads * self.head_dim,
-        #     bias=config.attention_bias,
-        # )
+        self.k_proj_noise = nn.Linear(
+            config.hidden_size,
+            self.num_key_value_heads * self.head_dim,
+            bias=config.attention_bias,
+        )
+        self.v_proj_noise = nn.Linear(
+            config.hidden_size,
+            self.num_key_value_heads * self.head_dim,
+            bias=config.attention_bias,
+        )
         self.o_proj = nn.Linear(
             self.num_attention_heads * self.head_dim,
             config.hidden_size,
@@ -96,9 +96,9 @@ class Qwen3MySpecAttention(nn.Module):
         )
         q = self.q_norm(q).transpose(1, 2)
         k_ctx = self.k_proj(target_hidden_states)
-        k_noise = self.k_proj(hidden_states)
+        k_noise = self.k_proj_noise(hidden_states)
         v_ctx = self.v_proj(target_hidden_states)
-        v_noise = self.v_proj(hidden_states)
+        v_noise = self.v_proj_noise(hidden_states)
         k = torch.cat([k_ctx, k_noise], dim=1).view(
             bsz, ctx_len + q_len, self.num_key_value_heads, self.head_dim
         )
