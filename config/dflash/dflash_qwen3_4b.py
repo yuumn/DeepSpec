@@ -24,8 +24,8 @@ model = dict(
 
     # CE-only loss.
     loss_decay_gamma=4.0,
-    ce_loss_alpha=1.0,
-    l1_loss_alpha=0.0,
+    ce_loss_alpha=0.1,
+    l1_loss_alpha=0.9,
 )
 
 train = dict(

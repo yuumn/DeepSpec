@@ -36,7 +36,7 @@ fi
 output_dir=${checkpoint_dir}/eval
 mkdir -p ${output_dir}
 
-for epoch in $(seq $START $END); do
+for epoch in $(seq $END -1 $START); do
     STEP=$((epoch * STRIDE))
     draft_name_or_path=${checkpoint_subdir}/step_${STEP}
 

@@ -5,7 +5,7 @@ echo "DEEPSPEC_DIR: ${DEEPSPEC_DIR}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 spec_mode=myspec
 LOWER_MODEL_NAME=qwen3_4b
-OUTPUT_DIR=${DEEPSPEC_DIR}/train_log_checkpoints/train_${spec_mode}_${LOWER_MODEL_NAME}_2latent-token_2latent_3mask_${TIMESTAMP}
+OUTPUT_DIR=${DEEPSPEC_DIR}/train_log_checkpoints/train_${spec_mode}_${LOWER_MODEL_NAME}_2latent-token_2latent-kvspilt_3mask-kvspilt_${TIMESTAMP}
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
 export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
 export MASTER_PORT=${MASTER_PORT:-29500}
@@ -22,10 +22,10 @@ TRAIN_LOG_CHECKPOINTS=${DEEPSPEC_DIR}/train_log_checkpoints
 CMD_SUFFIX=()
 
 if [ -n "${REUSE_CKPT_DIR:-}" ]; then
-    if [[ "$REUSE_CKPT_INPUT" = /* ]]; then
-        REUSE_CKPT_DIR="$REUSE_CKPT_INPUT"
+    if [[ "$REUSE_CKPT_DIR" = /* ]]; then
+        REUSE_CKPT_DIR="$REUSE_CKPT_DIR"
     else
-        REUSE_CKPT_DIR="${TRAIN_LOG_CHECKPOINTS}/${REUSE_CKPT_INPUT}"
+        REUSE_CKPT_DIR="${TRAIN_LOG_CHECKPOINTS}/${REUSE_CKPT_DIR}"
     fi
     if [[ ! -d "$REUSE_CKPT_DIR" ]]; then
         echo "错误: checkpoints复用目录不存在: $REUSE_CKPT_DIR" >&2
