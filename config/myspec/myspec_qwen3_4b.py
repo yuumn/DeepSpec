@@ -63,10 +63,15 @@ logging = dict(
 )
 
 data = dict(
+    hidden_state_source="cache",
     target_cache_path=None,
+    train_data_paths=[],
     chat_template="qwen",
     max_length=4096,
+    min_loss_tokens=14,
     num_workers=4,
+    target_server_url="http://127.0.0.1:31000",
+    target_request_timeout_s=600,
 )
 
 

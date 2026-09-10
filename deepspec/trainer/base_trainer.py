@@ -11,8 +11,9 @@ from torch.distributed.fsdp import MixedPrecision, ShardingStrategy
 from torch.utils.data import DataLoader
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
-from deepspec.data import CacheDataset, validate_train_cache
+from deepspec.data import CacheDataset, RealtimeCollator, validate_train_cache
 from deepspec.data.cuda_prefetcher import CUDAPrefetcher
+from deepspec.data.jsonl_dataset import JsonLineDataset
 from deepspec.utils import (
     BF16Optimizer,
     StatelessResumableDistributedSampler,
@@ -188,12 +189,46 @@ class BaseTrainer:
             self.model = torch.compile(self.model, dynamic=True)
         self.model = self._wrap_with_fsdp(self.model)
 
-        self.train_dataset = CacheDataset(cache_dir=self.args.data.target_cache_path)
-        validate_train_cache(
-            train_dataset=self.train_dataset,
-            draft_model=self.draft_model,
-            target_model_name_or_path=self.args.model.target_model_name_or_path,
+        hidden_state_source = getattr(
+            self.args.data, "hidden_state_source", "cache"
         )
+        if hidden_state_source == "cache":
+            self.train_dataset = CacheDataset(
+                cache_dir=self.args.data.target_cache_path
+            )
+            validate_train_cache(
+                train_dataset=self.train_dataset,
+                draft_model=self.draft_model,
+                target_model_name_or_path=self.args.model.target_model_name_or_path,
+            )
+            self.train_collator = self.data_collator_cls()
+        elif hidden_state_source == "transformers_realtime":
+            if int(self.args.data.num_workers) != 0:
+                raise ValueError(
+                    "transformers_realtime requires data.num_workers=0 because "
+                    "the Mooncake client must stay in the training process"
+                )
+            train_data_paths = list(self.args.data.train_data_paths)
+            if not train_data_paths:
+                raise ValueError(
+                    "transformers_realtime requires data.train_data_paths"
+                )
+            self.train_dataset = JsonLineDataset(data_paths=train_data_paths)
+            self.train_collator = RealtimeCollator(
+                tokenizer=self.tokenizer,
+                chat_template=self.args.data.chat_template,
+                max_length=self.args.data.max_length,
+                min_loss_tokens=self.args.data.min_loss_tokens,
+                target_server_url=self.args.data.target_server_url,
+                target_model_name_or_path=self.args.model.target_model_name_or_path,
+                target_layer_ids=self.args.model.target_layer_ids,
+                target_hidden_size=self.draft_model.config.hidden_size,
+                request_timeout_s=self.args.data.target_request_timeout_s,
+            )
+        else:
+            raise ValueError(
+                f"unsupported hidden_state_source: {hidden_state_source}"
+            )
 
         (
             self.gradient_accumulation_steps,
@@ -302,16 +337,20 @@ class BaseTrainer:
             start_global_offset_samples=start_offset_samples,
             num_samples=num_samples,
         )
-        return DataLoader(
-            self.train_dataset,
+        num_workers = int(self.args.data.num_workers)
+        dataloader_kwargs = dict(
+            dataset=self.train_dataset,
             batch_size=int(self.args.train.local_batch_size),
             sampler=sampler,
-            collate_fn=self.data_collator_cls(),
-            num_workers=int(self.args.data.num_workers),
+            collate_fn=self.train_collator,
+            num_workers=num_workers,
             pin_memory=True,
             drop_last=True,
-            persistent_workers=True,
-            prefetch_factor=4,
+        )
+        if num_workers > 0:
+            dataloader_kwargs.update(persistent_workers=True, prefetch_factor=4)
+        return DataLoader(
+            **dataloader_kwargs,
         )
 
     def run_batch(self, batch):
@@ -428,7 +467,9 @@ class BaseTrainer:
 
     def clean_up(self):
         training_logger.close()
+        close_dataset = getattr(self.train_dataset, "close", None)
+        if close_dataset is not None:
+            close_dataset()
         torch.cuda.memory._record_memory_history(enabled=None)
         dist.barrier()
         dist.destroy_process_group()
-

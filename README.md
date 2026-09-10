@@ -38,6 +38,19 @@ bash scripts/train/train.sh
 
 Hardware: the default configs and scripts assume a single node with 8 GPUs. For fewer GPUs, reduce `CUDA_VISIBLE_DEVICES`.
 
+To generate target hidden states online instead of building the large disk
+cache, install Mooncake 0.3.13 or newer (`mooncake-transfer-engine`, or the
+CUDA 13-specific `mooncake-transfer-engine-cuda13`) and run:
+
+```bash
+TRAIN_DATA_PATH=train_datasets/qwen3_4b/perfectblend_train_regen.jsonl \
+    bash scripts/train/train_realtime_1p7.sh
+```
+
+This launcher assigns physical GPU 0 to the Transformers target service and
+physical GPUs 1-7 to DeepSpec training. The offline target-cache path remains
+the default behavior of the existing configs and launch scripts.
+
 
 ## Evaluation
 

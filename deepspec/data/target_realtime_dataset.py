@@ -1,136 +1,139 @@
-"""Target-cache storage protocol, writers, dataset, collator, and validation."""
+"""Training-side collator for realtime Transformers target inference."""
 
 import json
-import mmap
-import os
-import queue
-import shutil
-import struct
-import threading
-from collections import OrderedDict
-from dataclasses import dataclass
-from typing import Dict, List
+import uuid
+from urllib import error, request
 
-import numpy as np
 import torch
 
-from deepspec.data.parser import preprocess_record
-
-
-class RealtimeDataset(torch.utils.data.Dataset):
-    def __init__(self, cache_dir: str, max_open_shards: int = 4):
-        super().__init__()
-        # self.cache_dir = os.path.abspath(cache_dir)
-        # self.manifest = load_target_cache_manifest(self.cache_dir)
-        # self.num_samples = int(self.manifest["num_samples"])
-        # self.hidden_size = int(self.manifest["hidden_size"])
-        # self.target_layer_ids = [int(layer_id) for layer_id in self.manifest["target_layer_ids"]]
-        # self.num_target_layers = len(self.target_layer_ids)
-        # self.index_path = os.path.join(self.cache_dir, "samples.idx")
-        # self.index_file = None
-        # self.index_mmap = None
-        # self.max_open_shards = max_open_shards
-        # self.shard_handles = OrderedDict()
-        # self.shard_mmaps = OrderedDict()
-        # self.shard_paths = {
-        #     int(shard["shard_id"]): build_target_cache_shard_path(
-        #         self.cache_dir,
-        #         shard["file_name"],
-        #     )
-        #     for shard in self.manifest["shards"]
-        # }
-
-    def __len__(self):
-        return self.num_samples
-
-    def close(self):
-        pass
-
-    def __del__(self):  # pragma: no cover
-        self.close()
-
-
-    def __getitem__(self, index: int):
-        if not (0 <= int(index) < self.num_samples):
-            raise IndexError(index)
-        
-
-        
-        return {
-            "input_ids": input_ids,
-            "loss_mask": loss_mask,
-            "target_hidden_states": target_hidden_states,
-            "target_last_hidden_states": target_last_hidden_states,
-        }
-
-
-def _pad_1d_batch(features: List[Dict], key: str):
-    max_length = max(item[key].shape[0] for item in features)
-    batch_size = len(features)
-    dtype = features[0][key].dtype
-    out = torch.zeros((batch_size, max_length), dtype=dtype)
-    for i, item in enumerate(features):
-        seq_len = item[key].shape[0]
-        out[i, :seq_len] = item[key]
-    return out
-
-
-def _pad_hidden_batch(features: List[Dict], key: str):
-    max_length = max(item[key].shape[0] for item in features)
-    batch_size = len(features)
-    hidden_dim = features[0][key].shape[1]
-    dtype = features[0][key].dtype
-    out = torch.zeros((batch_size, max_length, hidden_dim), dtype=dtype)
-    for i, item in enumerate(features):
-        seq_len = item[key].shape[0]
-        out[i, :seq_len] = item[key]
-    return out
-
-
-class ConversationCollator:
-    def __init__(
-        self,
-        tokenizer,
-        chat_template,
-        max_length,
-        min_loss_tokens: int,
-    ):
-        self.tokenizer = tokenizer
-        self.chat_template = chat_template
-        self.max_length = int(max_length)
-        self.min_loss_tokens = int(min_loss_tokens)
-
-    def _process_feature(self, item):
-        processed = preprocess_record(
-            record=item,
-            tokenizer=self.tokenizer,
-            chat_template=self.chat_template,
-            max_length=self.max_length,
-        )
-        if int(processed["loss_mask"].sum().item()) < self.min_loss_tokens:
-            return None
-        return processed
-
-    def __call__(self, features: List[Dict]):
-        features = [self._process_feature(item) for item in features]
-        features = [item for item in features if item is not None]
-        if not features:
-            return None
-        batch = {}
-        for key in ("input_ids", "attention_mask", "loss_mask"):
-            batch[key] = _pad_1d_batch(features, key)
-        return batch
+from deepspec.data.mooncake_transport import MooncakeTensorStore
+from deepspec.data.target_cache_dataset import ConversationCollator
 
 
 class RealtimeCollator:
-    def __call__(self, features: List[Dict]):
-        batch = {}
-        for key in ("input_ids", "loss_mask"):
-            batch[key] = _pad_1d_batch(features, key)
-        attention_mask = torch.zeros_like(batch["input_ids"], dtype=torch.long)
-        for i, item in enumerate(features):
-            attention_mask[i, : item["input_ids"].shape[0]] = 1
-        batch["attention_mask"] = attention_mask
-        for key in ("target_hidden_states", "target_last_hidden_states"):
-            batch[key] = _pad_hidden_batch(features, key)
+    def __init__(
+        self,
+        *,
+        tokenizer,
+        chat_template,
+        max_length,
+        min_loss_tokens,
+        target_server_url,
+        target_model_name_or_path,
+        target_layer_ids,
+        target_hidden_size,
+        request_timeout_s=600,
+    ):
+        self.conversation_collator = ConversationCollator(
+            tokenizer=tokenizer,
+            chat_template=chat_template,
+            max_length=max_length,
+            min_loss_tokens=min_loss_tokens,
+        )
+        self.generate_url = f"{str(target_server_url).rstrip('/')}/generate"
+        self.target_model_name_or_path = str(target_model_name_or_path)
+        self.target_layer_ids = [int(layer_id) for layer_id in target_layer_ids]
+        self.target_hidden_size = int(target_hidden_size)
+        self.request_timeout_s = float(request_timeout_s)
+        self.store = MooncakeTensorStore(writer=False)
+
+    def _request_hidden_states(self, batch_id: str, batch: dict) -> dict:
+        payload = json.dumps(
+            {
+                "batch_id": batch_id,
+                "input_ids": batch["input_ids"].tolist(),
+                "attention_mask": batch["attention_mask"].tolist(),
+            }
+        ).encode("utf-8")
+        http_request = request.Request(
+            self.generate_url,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with request.urlopen(
+                http_request, timeout=self.request_timeout_s
+            ) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"target server returned HTTP {exc.code}: {detail}"
+            ) from exc
+        except error.URLError as exc:
+            raise RuntimeError(
+                f"cannot reach target server {self.generate_url}: {exc}"
+            ) from exc
+
+    def _validate_response(self, response: dict, batch_id: str, batch: dict) -> None:
+        if response.get("batch_id") != batch_id:
+            raise RuntimeError("target server returned a mismatched batch_id")
+        if (
+            response.get("target_model_name_or_path")
+            != self.target_model_name_or_path
+        ):
+            raise RuntimeError(
+                "target server model does not match the training config"
+            )
+        if (
+            [int(x) for x in response.get("target_layer_ids", [])]
+            != self.target_layer_ids
+        ):
+            raise RuntimeError(
+                "target server layer ids do not match the training config"
+            )
+        batch_size, seq_len = batch["input_ids"].shape
+        expected_shapes = {
+            "target_hidden_states": [
+                batch_size,
+                seq_len,
+                len(self.target_layer_ids) * self.target_hidden_size,
+            ],
+            "target_last_hidden_states": [
+                batch_size,
+                seq_len,
+                self.target_hidden_size,
+            ],
+        }
+        features = response.get("features", {})
+        for name, shape in expected_shapes.items():
+            if (
+                name not in features
+                or list(features[name].get("shape", [])) != shape
+            ):
+                raise RuntimeError(
+                    f"invalid {name} shape from target server: "
+                    f"{features.get(name, {}).get('shape')}, expected {shape}"
+                )
+            if features[name].get("dtype") != "bfloat16":
+                raise RuntimeError(
+                    f"invalid {name} dtype from target server: "
+                    f"{features[name].get('dtype')}"
+                )
+
+    def __call__(self, features):
+        batch = self.conversation_collator(features)
+        if batch is None or batch["input_ids"].shape[0] != len(features):
+            raise RuntimeError(
+                "realtime training cannot drop records inside a batch; "
+                "prefilter records with fewer than min_loss_tokens"
+            )
+        batch_id = uuid.uuid4().hex
+        response = self._request_hidden_states(batch_id, batch)
+        self._validate_response(response, batch_id, batch)
+
+        remote_features = response["features"]
+        fetched = {}
+        try:
+            for name in ("target_hidden_states", "target_last_hidden_states"):
+                fetched[name] = self.store.get_tensor(remote_features[name])
+        finally:
+            for name in fetched:
+                self.store.remove(remote_features[name]["key"])
+
+        padding = batch["attention_mask"].eq(0).unsqueeze(-1)
+        for name, tensor in fetched.items():
+            tensor.masked_fill_(padding, 0)
+            batch[name] = tensor
         return batch
