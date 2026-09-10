@@ -33,7 +33,7 @@ def forward_myspec_draft_block(
     batch_size = position_ids.size(0)
     cache_len = past_key_values_draft.get_seq_length()
     cache_position_ids = position_ids[:, cache_len: start]
-    latent_position_ids = position_ids[:, start: start + 1].expand(-1, model.num_latent_tokens)
+    latent_position_ids = position_ids[:, start: start + model.num_latent_tokens]
     mask_position_ids = position_ids[:, start: start + block_size]
 
 

@@ -11,7 +11,7 @@ DEEPSPEC_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 MODEL_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/models
 
-target_name_or_path=${MODEL_DIR}/Qwen/Qwen3-4B
+target_name_or_path=${MODEL_DIR}/Qwen/Qwen3-8B
 
 checkpoint_dir=${1:-}
 STRIDE=${2:-2616}

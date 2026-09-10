@@ -22,7 +22,7 @@ model = dict(
 
     ## Latent Cot
     num_latent_layers=2,
-    num_latent_tokens=2,
+    num_latent_tokens=4,
     latent_token_id=151670,
 
     ## markov head

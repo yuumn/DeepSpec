@@ -306,8 +306,8 @@ def create_latent_position_ids(
 ) -> torch.Tensor:
     bsz, num_blocks = anchor_positions.shape
     device = anchor_positions.device
-    # offsets = torch.arange(num_latent_tokens, device=device).view(1, 1, -1)
-    offsets = torch.zeros(num_latent_tokens, device=device).view(1, 1, -1)
+    offsets = torch.arange(num_latent_tokens, device=device).view(1, 1, -1)
+    # offsets = torch.zeros(num_latent_tokens, device=device).view(1, 1, -1)
     return (anchor_positions.unsqueeze(-1) + offsets).view(
         bsz,
         num_blocks * num_latent_tokens,

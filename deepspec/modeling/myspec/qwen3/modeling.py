@@ -94,6 +94,7 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
             bias=False,
         )
         self.hidden_norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.latent_hidden_norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         self.block_size = int(config.block_size)
         self.mask_token_id = config.mask_token_id
@@ -275,7 +276,7 @@ class Qwen3MySpecModel(Qwen3PreTrainedModel):
             )
         
         hidden_states = noise_embedding
-        # target_hidden_states = torch.cat([target_hidden_states, latent_hidden_states], dim=1)
+        latent_hidden_states = self.latent_hidden_norm(latent_hidden_states)
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
         for layer in self.layers:
             hidden_states = layer(

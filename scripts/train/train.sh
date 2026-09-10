@@ -3,9 +3,9 @@
 DEEPSPEC_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 echo "DEEPSPEC_DIR: ${DEEPSPEC_DIR}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-spec_mode=myspec
-LOWER_MODEL_NAME=qwen3_4b
-OUTPUT_DIR=${DEEPSPEC_DIR}/train_log_checkpoints/train_${spec_mode}_${LOWER_MODEL_NAME}_2latent-token_2latent-kvspilt_3mask-kvspilt_${TIMESTAMP}
+spec_mode=dflash
+LOWER_MODEL_NAME=qwen3_8b
+OUTPUT_DIR=${DEEPSPEC_DIR}/train_log_checkpoints/train_${spec_mode}_${LOWER_MODEL_NAME}_0.1ce-0.9l1_${TIMESTAMP}
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
 export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
 export MASTER_PORT=${MASTER_PORT:-29500}
@@ -14,7 +14,7 @@ export WORLD_SIZE=${WORLD_SIZE:-1}
 export BASE_TB_DIR=${BASE_TB_DIR:-${OUTPUT_DIR}/tensorboard}
 export BASE_CKPT_DIR=${BASE_CKPT_DIR:-${OUTPUT_DIR}/checkpoints}
 
-target_cache_dir=${target_cache_dir:-/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec/.cache/qwen3_4b_target_cache}
+target_cache_dir=${target_cache_dir:-"/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec/.cache/${LOWER_MODEL_NAME}_target_cache"}
 
 # MODEL_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/models
 TRAIN_LOG_CHECKPOINTS=${DEEPSPEC_DIR}/train_log_checkpoints
@@ -54,7 +54,7 @@ export TIMESTAMP=${TIMESTAMP}
 # nsys profile \
 #     -o /mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec/scripts/train/profile/out_${TIMESTAMP} \
 python train.py \
-    --config config/${spec_mode}/${spec_mode}_qwen3_4b.py \
+    --config config/${spec_mode}/${spec_mode}_${LOWER_MODEL_NAME}.py \
     --opts "data.target_cache_path=${target_cache_dir}" \
     --opts "data.num_workers=16" \
     --opts "train.local_batch_size=2" \
@@ -64,6 +64,5 @@ python train.py \
     "${CMD_SUFFIX[@]}" \
     2>&1 | tee -a ${OUTPUT_DIR}/train.log
 
-    # --opts "logging.tensorboard_dir=${REUSE_CKPT_DIR}/tensorboard/${spec_mode}_block7_qwen3_4b" \
     # no_shard shard_grad_op full_shard hybrid_shard hybrid_shard_zero2/_hybrid_shard_zero2
     # --opts "model.target_model_name_or_path=${MODEL_DIR}/Qwen/Qwen3-4B" \
