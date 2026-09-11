@@ -74,8 +74,6 @@ def finalize_cfg(cfg):
     logging_cfg = dict(cfg["logging"])
     project_name=str(cfg['project_name'])
     exp_name = str(cfg["exp_name"])
-    # logging_cfg["checkpoint_dir"] = os.path.join(BASE_CKPT_DIR, project_name, exp_name)
-    # logging_cfg["tensorboard_dir"] = os.path.join(BASE_TB_DIR, project_name, exp_name)
     logging_cfg["checkpoint_dir"] = os.path.join(BASE_CKPT_DIR, exp_name)
     logging_cfg["tensorboard_dir"] = os.path.join(BASE_TB_DIR, exp_name)
     cfg["logging"] = logging_cfg

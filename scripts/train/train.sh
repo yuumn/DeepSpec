@@ -2,10 +2,11 @@
 
 DEEPSPEC_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 echo "DEEPSPEC_DIR: ${DEEPSPEC_DIR}"
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-spec_mode=dflash
+TIMESTAMP=${TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}
+spec_mode=${spec_mode:-myspec}
 LOWER_MODEL_NAME=qwen3_8b
-OUTPUT_DIR=${DEEPSPEC_DIR}/train_log_checkpoints/train_${spec_mode}_${LOWER_MODEL_NAME}_0.1ce-0.9l1_${TIMESTAMP}
+CHECKPOINTS_DIR=${CHECKPOINTS_DIR:-"train_${spec_mode}_${LOWER_MODEL_NAME}_0.1ce-0.9l1_sharegpt_${TIMESTAMP}"}
+OUTPUT_DIR=${DEEPSPEC_DIR}/train_log_checkpoints/${CHECKPOINTS_DIR}
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
 export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
 export MASTER_PORT=${MASTER_PORT:-29500}
@@ -15,10 +16,7 @@ export BASE_TB_DIR=${BASE_TB_DIR:-${OUTPUT_DIR}/tensorboard}
 export BASE_CKPT_DIR=${BASE_CKPT_DIR:-${OUTPUT_DIR}/checkpoints}
 
 target_cache_dir=${target_cache_dir:-"/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec/.cache/${LOWER_MODEL_NAME}_target_cache"}
-
-# MODEL_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/models
 TRAIN_LOG_CHECKPOINTS=${DEEPSPEC_DIR}/train_log_checkpoints
-# REUSE_CKPT_DIR=${REUSE_CKPT_DIR:-}
 CMD_SUFFIX=()
 
 if [ -n "${REUSE_CKPT_DIR:-}" ]; then
@@ -58,6 +56,7 @@ python train.py \
     --opts "data.target_cache_path=${target_cache_dir}" \
     --opts "data.num_workers=16" \
     --opts "train.local_batch_size=2" \
+    --opts "train.num_train_epochs=10" \
     --opts "logging.checkpointing_steps=100" \
     --opts "logging.logging_steps=10" \
     --opts "train.sharding_strategy=no_shard" \
