@@ -1,11 +1,15 @@
 import os
-from deepspec.trainer import Qwen3DSparkTrainer
+from deepspec.trainer import Qwen3MySpecTrainer
+import time
+timestamp = time.strftime("%Y%m%d_%H%M")
 # BASE_TB_DIR = os.path.expanduser("~/tensorboard")
 # BASE_CKPT_DIR = os.path.expanduser("~/checkpoints")
 BASE_TB_DIR = os.environ.get("BASE_TB_DIR", os.path.expanduser("~/tensorboard"))
 BASE_CKPT_DIR = os.environ.get("BASE_CKPT_DIR", os.path.expanduser("~/checkpoints"))
+
 project_name = "deepspec"
-exp_name = "dflash_block7_qwen3_4b"
+# exp_name = f"myspec_block7_qwen3_4b_{timestamp}"
+exp_name = f"myspec_block7_qwen3_4b"
 seed = 42
 
 model = dict(
@@ -16,20 +20,29 @@ model = dict(
     mask_token_id=151669,
     num_anchors=512,
 
-    # Disable markov head.
+    ## Latent Cot
+    num_latent_layers=2,
+    num_latent_tokens=4,
+    latent_token_id=151670,
+
+    ## markov head
     markov_rank=0,
+    # markov_rank=256,
+    # markov_head_type='vanilla',
 
-    # Disable confidence head.
+    ## confidence head
     confidence_head_alpha=0.0,
+    # confidence_head_alpha=1.0,
+    # confidence_head_with_markov=True,
 
-    # CE-only loss.
+    ## loss
     loss_decay_gamma=4.0,
     ce_loss_alpha=0.1,
     l1_loss_alpha=0.9,
 )
 
 train = dict(
-    trainer_cls=Qwen3DSparkTrainer,
+    trainer_cls=Qwen3MySpecTrainer,
     lr=6.0e-4,
     warmup_ratio=0.04,
     weight_decay=0.0,
@@ -47,8 +60,6 @@ logging = dict(
     logging_steps=10,
     checkpointing_steps=3000,
     resume_checkpoint_dir="",
-    # checkpoint_dir="",
-    # tensorboard_dir="",
 )
 
 data = dict(
@@ -63,18 +74,8 @@ def finalize_cfg(cfg):
     logging_cfg = dict(cfg["logging"])
     project_name=str(cfg['project_name'])
     exp_name = str(cfg["exp_name"])
-    # logging_cfg["checkpoint_dir"] = os.path.join(BASE_CKPT_DIR, project_name, exp_name)
-    # logging_cfg["tensorboard_dir"] = os.path.join(BASE_TB_DIR, project_name, exp_name)
-    print(f"logging_cfg: {logging_cfg}")
-    # if not logging_cfg["checkpoint_dir"]:
     logging_cfg["checkpoint_dir"] = os.path.join(BASE_CKPT_DIR, exp_name)
-    # if not logging_cfg["tensorboard_dir"]:
     logging_cfg["tensorboard_dir"] = os.path.join(BASE_TB_DIR, exp_name)
-    print(f"checkpoint_dir: {logging_cfg["checkpoint_dir"]}")
-    print(f"tensorboard_dir: {logging_cfg["tensorboard_dir"]}")
-    # else
-    # logging_cfg["checkpoint_dir"] = "/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec/train_log_checkpoints/train_dflash_qwen3_4b_20260710_232641/checkpoints/dflash_block7_qwen3_4b"
-    # logging_cfg["tensorboard_dir"] = "/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec/train_log_checkpoints/train_dflash_qwen3_4b_20260710_232641/tensorboard/dflash_block7_qwen3_4b"
     cfg["logging"] = logging_cfg
     
     return cfg

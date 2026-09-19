@@ -36,16 +36,12 @@ def forward_myspec_draft_block(
     latent_position_ids = position_ids[:, start: start + model.num_latent_tokens]
     mask_position_ids = position_ids[:, start: start + block_size]
 
-
     full_latent_position_ids = torch.cat(
         [
             cache_position_ids,
             latent_position_ids,
         ], dim=1
     )
-    # draft_position_ids = position_ids[
-    #     :, past_key_values_draft.get_seq_length() : start + block_size
-    # ]
     full_mask_position_ids = torch.cat(
         [
             cache_position_ids,

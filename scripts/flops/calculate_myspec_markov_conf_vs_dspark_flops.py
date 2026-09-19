@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare the configured MySpec model with the configured DFlash baseline."""
+"""Compare configured MySpec+Markov+confidence with configured DSpark."""
 
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ from flops_core import (
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[1]
-DEFAULT_MYSPEC_CONFIG = REPO_ROOT / "config/myspec/myspec_qwen3_4b_eager.py"
-DEFAULT_DFLASH_CONFIG = REPO_ROOT.parent / "DeepSpec/config/dflash/dflash_qwen3_4b.py"
+DEFAULT_MYSPEC_CONFIG = REPO_ROOT / "config/myspec/myspec_qwen3_4b.py"
+DEFAULT_DSPARK_CONFIG = REPO_ROOT / "config/dspark/dspark_qwen3_4b.py"
 
 
 def positive_int(raw: str) -> int:
@@ -28,20 +28,23 @@ def positive_int(raw: str) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Calculate MySpec vs DFlash training/inference FLOPs.",
+        description=(
+            "Calculate MySpec-Markov-Confidence vs DSpark "
+            "training/inference FLOPs."
+        ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
         "--myspec-config",
         type=Path,
         default=DEFAULT_MYSPEC_CONFIG,
-        help="MySpec experiment config",
+        help="MySpec Markov/confidence experiment config",
     )
     parser.add_argument(
-        "--dflash-config",
+        "--dspark-config",
         type=Path,
-        default=DEFAULT_DFLASH_CONFIG,
-        help="DFlash experiment config",
+        default=DEFAULT_DSPARK_CONFIG,
+        help="DSpark experiment config",
     )
     parser.add_argument(
         "--target-config",
@@ -77,12 +80,12 @@ def main() -> None:
     )
     myspec = architecture_from_config(
         args.myspec_config,
-        name="MySpec",
+        name="MySpec-Markov-Conf",
         kind="myspec",
     )
-    dflash = architecture_from_config(
-        args.dflash_config,
-        name="DFlash",
+    dspark = architecture_from_config(
+        args.dspark_config,
+        name="DSpark",
         kind="dspark",
     )
     new_context_tokens = (
@@ -91,13 +94,13 @@ def main() -> None:
         else myspec.block_size + 1
     )
     report = render_markdown_report(
-        title="MySpec vs DFlash FLOPs",
+        title="MySpec-Markov-Confidence vs DSpark FLOPs",
         contexts=args.context_lengths,
         dims=dims,
         candidate=myspec,
-        baseline=dflash,
+        baseline=dspark,
         candidate_config=args.myspec_config.resolve(),
-        baseline_config=args.dflash_config.resolve(),
+        baseline_config=args.dspark_config.resolve(),
         new_context_tokens=new_context_tokens,
     )
     print(report)

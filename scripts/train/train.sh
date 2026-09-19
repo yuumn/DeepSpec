@@ -4,8 +4,8 @@ DEEPSPEC_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 echo "DEEPSPEC_DIR: ${DEEPSPEC_DIR}"
 TIMESTAMP=${TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}
 spec_mode=${spec_mode:-myspec}
-LOWER_MODEL_NAME=qwen3_8b
-CHECKPOINTS_DIR=${CHECKPOINTS_DIR:-"train_${spec_mode}_${LOWER_MODEL_NAME}_0.1ce-0.9l1_sharegpt_${TIMESTAMP}"}
+LOWER_MODEL_NAME=${LOWER_MODEL_NAME:-qwen3_8b}
+CHECKPOINTS_DIR=${CHECKPOINTS_DIR:-"train_${spec_mode}-markov-conf_${LOWER_MODEL_NAME}_0.1ce-0.9l1_PerfectBlend__${TIMESTAMP}"}
 OUTPUT_DIR=${DEEPSPEC_DIR}/train_log_checkpoints/${CHECKPOINTS_DIR}
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
 export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
