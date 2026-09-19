@@ -55,6 +55,46 @@ def load_and_process_dataset(
     return rows
 
 
+def load_selected_dataset(
+    *,
+    dataset_name: str,
+    max_samples: int | None,
+    seed: int,
+    dataset_root: str = DEFAULT_DATASET_ROOT,
+) -> list[dict[str, Any]]:
+    """Load a dataset and apply the same seeded sample selection as evaluation."""
+    dataset = load_and_process_dataset(dataset_name, dataset_root=dataset_root)
+    if max_samples is not None and len(dataset) > max_samples:
+        rng = random.Random(int(seed))
+        dataset = list(dataset)
+        rng.shuffle(dataset)
+        dataset = dataset[:max_samples]
+    return dataset
+
+
+def save_dataset_prompts(
+    *,
+    dataset_name: str,
+    dataset: list[dict[str, Any]],
+    output_dir: str | os.PathLike[str],
+) -> Path:
+    """Save the prompts selected for evaluation as one JSON object per line."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{dataset_name}.jsonl"
+
+    with output_path.open("w", encoding="utf-8") as handle:
+        for instance in dataset:
+            json.dump(
+                {"prompt": instance["turns"][0]},
+                handle,
+                ensure_ascii=False,
+            )
+            handle.write("\n")
+
+    return output_path
+
+
 def trim_output_ids(
     output_ids: torch.Tensor,
     num_input_tokens: int,
@@ -517,13 +557,23 @@ class BaseEvaluator:
         max_samples: int | None,
     ) -> list[SimpleNamespace]:
         seed_all(int(self.args.seed))
-        dataset = load_and_process_dataset(dataset_name)
+        dataset = load_selected_dataset(
+            dataset_name=dataset_name,
+            max_samples=max_samples,
+            seed=int(self.args.seed),
+        )
 
-        if max_samples is not None and len(dataset) > max_samples:
-            rng = random.Random(int(self.args.seed))
-            dataset = list(dataset)
-            rng.shuffle(dataset)
-            dataset = dataset[:max_samples]
+        dataset_prompt_dir = getattr(self.args, "dataset_prompt_dir", None)
+        if dataset_prompt_dir is not None and self.global_rank == 0:
+            output_path = save_dataset_prompts(
+                dataset_name=dataset_name,
+                dataset=dataset,
+                output_dir=dataset_prompt_dir,
+            )
+            print(
+                f"Saved {len(dataset)} {dataset_name} prompts to {output_path}",
+                flush=True,
+            )
 
         stop_token_ids = resolve_stop_token_ids(self.target_model, self.tokenizer)
         responses = []

@@ -48,5 +48,7 @@ for epoch in $(seq $END -1 $START); do
     DEEPSPEC_INFERENCE_EVAL=1 python eval.py \
         --target_name_or_path ${target_name_or_path} \
         --draft_name_or_path ${draft_name_or_path} \
+        --save-dataset-only \
+        --dataset-prompt-dir /mnt/dolphinfs/ssd_pool/docker/user/hadoop-efficient-llm/yuanerhang/workspace/spec/sglang/datasets \
         2>&1 | tee -a ${output_dir}/myspec_${suffix}.log
 done
