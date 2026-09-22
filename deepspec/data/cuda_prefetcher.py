@@ -8,6 +8,10 @@ def move_batch_to_device(batch, device):
     # Embedding lookup requires int64; cast on GPU to avoid bloating CPU-to-GPU transfer.
     if moved["input_ids"].dtype != torch.long:
         moved["input_ids"] = moved["input_ids"].to(torch.long)
+    # The token cache stores masks as uint8. Target-model attention code expects
+    # the conventional integer mask, so expand it only after the compact H2D copy.
+    if moved["attention_mask"].dtype != torch.long:
+        moved["attention_mask"] = moved["attention_mask"].to(torch.long)
     return moved
 
 

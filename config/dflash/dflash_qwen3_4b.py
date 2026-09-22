@@ -52,9 +52,10 @@ logging = dict(
 )
 
 data = dict(
-    target_cache_path=None,
+    token_cache_path=None,
     chat_template="qwen",
     max_length=4096,
+    min_loss_tokens=14,
     num_workers=4,
 )
 
@@ -70,8 +71,8 @@ def finalize_cfg(cfg):
     logging_cfg["checkpoint_dir"] = os.path.join(BASE_CKPT_DIR, exp_name)
     # if not logging_cfg["tensorboard_dir"]:
     logging_cfg["tensorboard_dir"] = os.path.join(BASE_TB_DIR, exp_name)
-    print(f"checkpoint_dir: {logging_cfg["checkpoint_dir"]}")
-    print(f"tensorboard_dir: {logging_cfg["tensorboard_dir"]}")
+    print(f"checkpoint_dir: {logging_cfg['checkpoint_dir']}")
+    print(f"tensorboard_dir: {logging_cfg['tensorboard_dir']}")
     # else
     # logging_cfg["checkpoint_dir"] = "/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec/train_log_checkpoints/train_dflash_qwen3_4b_20260710_232641/checkpoints/dflash_block7_qwen3_4b"
     # logging_cfg["tensorboard_dir"] = "/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec/train_log_checkpoints/train_dflash_qwen3_4b_20260710_232641/tensorboard/dflash_block7_qwen3_4b"

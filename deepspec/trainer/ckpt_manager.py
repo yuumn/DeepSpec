@@ -20,13 +20,28 @@ from deepspec.utils import (
 
 
 TRAIN_CONFIG_FILE_NAME = "train_config.py"
+DATASET_STATE_FILE_NAME = "dataset_state.pt"
 
 
 def discover_latest_checkpoint(checkpoint_dir):
+    if not checkpoint_dir:
+        return None
+    checkpoint_dir = os.path.abspath(checkpoint_dir)
+    if os.path.isfile(os.path.join(checkpoint_dir, DATASET_STATE_FILE_NAME)):
+        return checkpoint_dir
     latest_link = os.path.join(checkpoint_dir, "step_latest")
     if not (os.path.islink(latest_link) or os.path.isdir(latest_link)):
         return None
     return os.path.realpath(latest_link)
+
+
+def load_checkpoint_dataset_state(checkpoint_dir: str):
+    state_path = os.path.join(checkpoint_dir, DATASET_STATE_FILE_NAME)
+    assert os.path.exists(state_path), (
+        "Resume checkpoint does not contain token-cache dataset state: "
+        f"{state_path}. This checkpoint cannot safely restore the sampler."
+    )
+    return torch.load(state_path, map_location="cpu", weights_only=False)
 
 
 def save_train_config(*, train_config, checkpoint_dir: str) -> str:
@@ -90,13 +105,15 @@ def load_training_state(
     local_batch_size: int,
     gradient_accumulation_steps: int,
     micro_batches_per_epoch: int,
+    samples_per_epoch: int,
+    max_train_steps: int,
+    sampler_seed: int,
+    dataset_signature,
 ) -> TrainingResumeState:
     state_path = _rank_training_state_path(resume_checkpoint_dir, global_rank)
     assert os.path.exists(state_path)
 
     checkpoint = torch.load(state_path, map_location="cpu", weights_only=False)
-    optimizer.load_state_dict(checkpoint["optimizer"])
-
     next_micro_step = int(checkpoint["next_micro_step"])
     assert next_micro_step % gradient_accumulation_steps == 0, (
         "next_micro_step must be aligned with gradient_accumulation_steps."
@@ -104,13 +121,51 @@ def load_training_state(
 
     saved_rank = int(checkpoint["global_rank"])
     assert saved_rank == int(global_rank)
-    
+
     saved_world_size = int(checkpoint["world_size"])
     assert saved_world_size == int(world_size)
-    
+
     saved_local_batch_size = int(checkpoint["local_batch_size"])
     assert saved_local_batch_size == int(local_batch_size)
 
+    saved_gradient_accumulation_steps = int(
+        checkpoint["gradient_accumulation_steps"]
+    )
+    assert saved_gradient_accumulation_steps == int(gradient_accumulation_steps), (
+        "gradient_accumulation_steps changed across resume: "
+        f"{saved_gradient_accumulation_steps} != {gradient_accumulation_steps}"
+    )
+
+    saved_micro_batches_per_epoch = int(checkpoint["micro_batches_per_epoch"])
+    assert saved_micro_batches_per_epoch == int(micro_batches_per_epoch), (
+        "micro_batches_per_epoch changed across resume: "
+        f"{saved_micro_batches_per_epoch} != {micro_batches_per_epoch}"
+    )
+
+    saved_samples_per_epoch = int(checkpoint["samples_per_epoch"])
+    assert saved_samples_per_epoch == int(samples_per_epoch), (
+        "samples_per_epoch changed across resume: "
+        f"{saved_samples_per_epoch} != {samples_per_epoch}"
+    )
+
+    saved_max_train_steps = int(checkpoint["max_train_steps"])
+    assert saved_max_train_steps == int(max_train_steps), (
+        "max_train_steps changed across resume: "
+        f"{saved_max_train_steps} != {max_train_steps}"
+    )
+
+    saved_sampler_seed = int(checkpoint["sampler_seed"])
+    assert saved_sampler_seed == int(sampler_seed), (
+        f"sampler seed changed across resume: {saved_sampler_seed} != {sampler_seed}"
+    )
+
+    saved_dataset_signature = checkpoint["dataset_signature"]
+    assert saved_dataset_signature == dataset_signature, (
+        "Dataset signature changed across resume.\n"
+        f"saved={saved_dataset_signature}\ncurrent={dataset_signature}"
+    )
+
+    optimizer.load_state_dict(checkpoint["optimizer"])
     torch.set_rng_state(checkpoint["torch_rng"])
     torch.cuda.set_rng_state(checkpoint["torch_cuda_rng"])
     np.random.set_state(checkpoint["numpy_rng"])
@@ -145,6 +200,11 @@ def save_checkpoint(
     global_rank: int,
     world_size: int,
     local_batch_size: int,
+    micro_batches_per_epoch: int,
+    samples_per_epoch: int,
+    max_train_steps: int,
+    sampler_seed: int,
+    dataset_state,
 ) -> str:
     assert next_micro_step % gradient_accumulation_steps == 0, (
         "next_micro_step must be aligned with gradient_accumulation_steps at "
@@ -156,6 +216,10 @@ def save_checkpoint(
     if is_global_main_process():
         ensure_dir(checkpoint_dir)
         save_train_config(train_config=train_config, checkpoint_dir=checkpoint_dir)
+        torch.save(
+            dataset_state,
+            os.path.join(checkpoint_dir, DATASET_STATE_FILE_NAME),
+        )
     dist.barrier()
     _save_model_checkpoint(
         model=model,
@@ -169,6 +233,11 @@ def save_checkpoint(
         global_rank=global_rank,
         world_size=world_size,
         local_batch_size=local_batch_size,
+        micro_batches_per_epoch=micro_batches_per_epoch,
+        samples_per_epoch=samples_per_epoch,
+        max_train_steps=max_train_steps,
+        sampler_seed=sampler_seed,
+        dataset_signature=dataset_state["signature"],
     )
     torch.save(
         training_state,
@@ -200,6 +269,11 @@ def _serialize_training_state(
     global_rank: int,
     world_size: int,
     local_batch_size: int,
+    micro_batches_per_epoch: int,
+    samples_per_epoch: int,
+    max_train_steps: int,
+    sampler_seed: int,
+    dataset_signature,
 ):
     assert next_micro_step % gradient_accumulation_steps == 0, (
         "next_micro_step must be aligned with gradient_accumulation_steps at "
@@ -212,6 +286,12 @@ def _serialize_training_state(
         "global_rank": int(global_rank),
         "world_size": int(world_size),
         "local_batch_size": int(local_batch_size),
+        "gradient_accumulation_steps": int(gradient_accumulation_steps),
+        "micro_batches_per_epoch": int(micro_batches_per_epoch),
+        "samples_per_epoch": int(samples_per_epoch),
+        "max_train_steps": int(max_train_steps),
+        "sampler_seed": int(sampler_seed),
+        "dataset_signature": dataset_signature,
         "torch_rng": torch.get_rng_state(),
         "torch_cuda_rng": torch.cuda.get_rng_state(),
         "numpy_rng": np.random.get_state(),

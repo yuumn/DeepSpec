@@ -38,9 +38,10 @@ logging = dict(
 )
 
 data = dict(
-    target_cache_path=None,
+    token_cache_path=None,
     chat_template="qwen",
     max_length=4096,
+    min_loss_tokens=14,
     num_workers=4,
 )
 

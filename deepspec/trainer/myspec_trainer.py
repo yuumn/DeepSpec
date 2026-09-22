@@ -1,4 +1,3 @@
-from deepspec.data import CacheCollator
 # from deepspec.modeling.myspec.gemma4 import Gemma4MyspecModel
 # from deepspec.modeling.myspec.gemma4.config import (
 #     build_draft_config as build_gemma4_draft_config,
@@ -12,8 +11,6 @@ from deepspec.trainer.base_trainer import BaseTrainer
 
 
 class Qwen3MySpecTrainer(BaseTrainer):
-    data_collator_cls = CacheCollator
-
     def _build_draft_model(self, *, target_config, model_args):
         draft_config = build_qwen3_draft_config(
             target_config=target_config,

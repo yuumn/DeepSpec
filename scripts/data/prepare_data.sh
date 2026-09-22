@@ -10,7 +10,7 @@ train_split_path=train_datasets/perfectblend_train.jsonl
 eval_data_dir=eval_datasets
 
 train_data_path=train_datasets/qwen3_4b/perfectblend_train_regen.jsonl
-cache_dir=${HOME}/.cache/deepspec/qwen3_4b_target_cache
+cache_dir=.cache/qwen3_4b_token_cache
 
 server_host=127.0.0.1
 num_workers=8
@@ -60,8 +60,8 @@ python scripts/data/generate_train_data.py \
     --output-file-path "${train_data_path}"
 
 echo "Stop sglang before Step 3 if it is using the same GPUs."
-echo "Step 3/3: preparing Qwen3-4B target cache: ${cache_dir}"
-python scripts/data/prepare_target_cache.py \
+echo "Step 3/3: preparing Qwen3-4B token cache: ${cache_dir}"
+python scripts/data/prepare_token-ids_loss-mask.py \
     --config "${config_path}" \
     --train-data-path "${train_data_path}" \
     --output-dir "${cache_dir}" \

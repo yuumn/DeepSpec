@@ -9,9 +9,14 @@ from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import MixedPrecision, ShardingStrategy
 from torch.utils.data import DataLoader
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoTokenizer
 
-from deepspec.data import CacheDataset, validate_train_cache
+from deepspec.data import (
+    TokenCacheCollator,
+    TokenCacheDataset,
+    run_target_forward_with_hooks,
+    validate_train_token_cache,
+)
 from deepspec.data.cuda_prefetcher import CUDAPrefetcher
 from deepspec.utils import (
     BF16Optimizer,
@@ -24,6 +29,7 @@ from deepspec.utils import (
 )
 from deepspec.trainer.ckpt_manager import (
     discover_latest_checkpoint,
+    load_checkpoint_dataset_state,
     load_resume_draft_model,
     load_training_state,
     save_checkpoint,
@@ -150,8 +156,6 @@ def _launch_eval(
     print("You can use this function to launch your auto eval script!")
 
 class BaseTrainer:
-    data_collator_cls = None
-
     def __init__(self, local_rank, args):
         self.args = args
         self.device, self.global_rank, self.world_size = init_dist(local_rank)
@@ -165,6 +169,7 @@ class BaseTrainer:
         print(f"self.resume_checkpoint_dir: {self.resume_checkpoint_dir }")
         self.suspend_controller = SuspendController(device=self.device)
         self.next_micro_step = 0
+        self.sampler_seed = int(self.args.seed)
 
         if is_global_main_process(): ensure_dir(self.checkpoint_dir_root)
         training_logger.init(
@@ -188,12 +193,24 @@ class BaseTrainer:
             self.model = torch.compile(self.model, dynamic=True)
         self.model = self._wrap_with_fsdp(self.model)
 
-        self.train_dataset = CacheDataset(cache_dir=self.args.data.target_cache_path)
-        validate_train_cache(
-            train_dataset=self.train_dataset,
-            draft_model=self.draft_model,
-            target_model_name_or_path=self.args.model.target_model_name_or_path,
+        checkpoint_dataset_state = None
+        if self.resume_checkpoint_dir is not None:
+            checkpoint_dataset_state = load_checkpoint_dataset_state(
+                self.resume_checkpoint_dir
+            )
+        self.train_dataset = TokenCacheDataset(
+            cache_dir=self.args.data.token_cache_path,
+            checkpoint_state=checkpoint_dataset_state,
         )
+        validate_train_token_cache(
+            train_dataset=self.train_dataset,
+            tokenizer=self.tokenizer,
+            target_model_name_or_path=self.args.model.target_model_name_or_path,
+            chat_template=self.args.data.chat_template,
+            max_length=int(self.args.data.max_length),
+            min_loss_tokens=int(self.args.data.min_loss_tokens),
+        )
+        self.target_model = self._build_online_target_model()
 
         (
             self.gradient_accumulation_steps,
@@ -228,6 +245,10 @@ class BaseTrainer:
                 local_batch_size=int(self.args.train.local_batch_size),
                 gradient_accumulation_steps=self.gradient_accumulation_steps,
                 micro_batches_per_epoch=self.micro_batches_per_epoch,
+                samples_per_epoch=self.samples_per_epoch,
+                max_train_steps=self.max_train_steps,
+                sampler_seed=self.sampler_seed,
+                dataset_signature=self.train_dataset.signature,
             )
             self.next_micro_step = resume_state.next_micro_step
         else:
@@ -241,6 +262,10 @@ class BaseTrainer:
     def info_board(self):
         print_on_local_main("***** Running training *****")
         print_on_local_main(f"  Train dataset size = {len(self.train_dataset)}")
+        print_on_local_main(f"  Token cache path = {self.train_dataset.cache_dir}")
+        print_on_local_main(
+            "  Cached fields = input_ids, attention_mask, loss_mask"
+        )
         print_on_local_main(f"  Num train epochs = {self.args.train.num_train_epochs}")
         print_on_local_main(f"  Samples per epoch = {self.samples_per_epoch}")
         print_on_local_main(f"  Local batch size = {self.args.train.local_batch_size}")
@@ -248,6 +273,7 @@ class BaseTrainer:
         print_on_local_main(f"  Gradient accumulation steps = {self.gradient_accumulation_steps}")
         print_on_local_main(f"  Steps per epoch = {self.steps_per_epoch}")
         print_on_local_main(f"  Max train steps = {self.max_train_steps}")
+        print_on_local_main("  Target hidden states = generated on local GPU")
 
     def build_models(self):
         model_args = self.args.model
@@ -265,8 +291,9 @@ class BaseTrainer:
         )
         draft_model = draft_model.to(device=self.device, dtype=self.precision_dtype)
 
-        # Training only uses the target checkpoint to initialize frozen draft
-        # embeddings and lm_head weights.
+        # This causal-LM instance is only used to initialize the frozen draft
+        # embeddings and lm_head. The target backbone used during training is
+        # loaded separately on the local GPU.
         target_model = AutoModelForCausalLM.from_pretrained(
             model_args.target_model_name_or_path,
             dtype=self.precision_dtype,
@@ -281,6 +308,36 @@ class BaseTrainer:
         )
         del target_model
         return draft_model, tokenizer
+
+    def _build_online_target_model(self):
+        print_on_local_main("Loading target model on each local GPU...")
+        target_model = AutoModel.from_pretrained(
+            self.args.model.target_model_name_or_path,
+            dtype=self.precision_dtype,
+            attn_implementation="sdpa",
+        )
+        target_model.requires_grad_(False)
+        return target_model.to(device=self.device).eval()
+
+    def _generate_target_hidden_states(self, batch):
+        target_result = run_target_forward_with_hooks(
+            target_model=self.target_model,
+            input_ids=batch["input_ids"],
+            attention_mask=batch["attention_mask"],
+            target_layer_ids=self.draft_model.target_layer_ids,
+        )
+
+        # The offline preparation pipeline slices every sample to its true
+        # length and pads hidden states with zeros. Match that behavior here so
+        # padded query positions cannot leak target activations downstream.
+        padding_mask = ~batch["attention_mask"].bool().unsqueeze(-1)
+        batch["target_hidden_states"] = (
+            target_result.target_hidden_states.masked_fill(padding_mask, 0)
+        )
+        batch["target_last_hidden_states"] = (
+            target_result.target_last_hidden_states.masked_fill(padding_mask, 0)
+        )
+        return batch
 
     def _build_draft_model(self, *, target_config, model_args):
         raise NotImplementedError
@@ -299,20 +356,26 @@ class BaseTrainer:
             num_replicas=self.world_size,
             rank=self.global_rank,
             total_size=self.samples_per_epoch,
+            seed=self.sampler_seed,
             start_global_offset_samples=start_offset_samples,
             num_samples=num_samples,
         )
-        return DataLoader(
-            self.train_dataset,
+        num_workers = int(self.args.data.num_workers)
+        dataloader_generator = torch.Generator()
+        dataloader_generator.manual_seed(self.sampler_seed)
+        dataloader_kwargs = dict(
+            dataset=self.train_dataset,
             batch_size=int(self.args.train.local_batch_size),
             sampler=sampler,
-            collate_fn=self.data_collator_cls(),
-            num_workers=int(self.args.data.num_workers),
+            collate_fn=TokenCacheCollator(),
+            num_workers=num_workers,
             pin_memory=True,
             drop_last=True,
-            persistent_workers=True,
-            prefetch_factor=4,
+            generator=dataloader_generator,
         )
+        if num_workers > 0:
+            dataloader_kwargs.update(persistent_workers=True, prefetch_factor=4)
+        return DataLoader(**dataloader_kwargs)
 
     def run_batch(self, batch):
         raise NotImplementedError
@@ -329,6 +392,11 @@ class BaseTrainer:
             global_rank=self.global_rank,
             world_size=self.world_size,
             local_batch_size=int(self.args.train.local_batch_size),
+            micro_batches_per_epoch=self.micro_batches_per_epoch,
+            samples_per_epoch=self.samples_per_epoch,
+            max_train_steps=self.max_train_steps,
+            sampler_seed=self.sampler_seed,
+            dataset_state=self.train_dataset.state_dict(),
         )
 
     def save_and_eval_checkpoint(self):
@@ -372,6 +440,7 @@ class BaseTrainer:
 
         with self.suspend_controller.monitoring():
             for batch in prefetcher:
+                batch = self._generate_target_hidden_states(batch)
                 should_sync = (
                     (self.next_micro_step + 1) % self.gradient_accumulation_steps == 0
                 )
@@ -409,26 +478,28 @@ class BaseTrainer:
                     # torch.cuda.reset_peak_memory_stats()
                     try:
                         file_prefix = os.environ.get(
-                            "PROFILE_FILE_PREFIX", 
-                            f"/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec/scripts/train/profile/memory_{os.environ.get("TIMESTAMP", "")}_rank{self.global_rank}"
+                            "PROFILE_FILE_PREFIX",
+                            f"/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec/scripts/train/profile/memory_{os.environ.get('TIMESTAMP', '')}_rank{self.global_rank}"
                         )
                         torch.cuda.memory._dump_snapshot(f"{file_prefix}.pickle")
                     except Exception as e:
-                        logger.error(f"Failed to capture memory snapshot {e}")
-                    
+                        print_on_local_main(f"Failed to capture memory snapshot: {e}")
+
                     break
 
                 if self.suspend_controller.requested():
                     self._save_and_suspend()
                     return
         if IS_PROFILE:
-            return 
+            return
 
         self.save_and_eval_checkpoint()
 
     def clean_up(self):
+        self.train_dataset.close()
+        del self.target_model
+        torch.cuda.empty_cache()
         training_logger.close()
         torch.cuda.memory._record_memory_history(enabled=None)
         dist.barrier()
         dist.destroy_process_group()
-

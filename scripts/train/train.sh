@@ -5,7 +5,7 @@ echo "DEEPSPEC_DIR: ${DEEPSPEC_DIR}"
 TIMESTAMP=${TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}
 spec_mode=${spec_mode:-myspec}
 LOWER_MODEL_NAME=${LOWER_MODEL_NAME:-qwen3_8b}
-CHECKPOINTS_DIR=${CHECKPOINTS_DIR:-"train_${spec_mode}-markov-conf_${LOWER_MODEL_NAME}_0.1ce-0.9l1_PerfectBlend__${TIMESTAMP}"}
+CHECKPOINTS_DIR=${CHECKPOINTS_DIR:-"train_${spec_mode}_${LOWER_MODEL_NAME}_0.1ce-0.9l1_PerfectBlend_${TIMESTAMP}"}
 OUTPUT_DIR=${DEEPSPEC_DIR}/train_log_checkpoints/${CHECKPOINTS_DIR}
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
 export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
@@ -15,7 +15,7 @@ export WORLD_SIZE=${WORLD_SIZE:-1}
 export BASE_TB_DIR=${BASE_TB_DIR:-${OUTPUT_DIR}/tensorboard}
 export BASE_CKPT_DIR=${BASE_CKPT_DIR:-${OUTPUT_DIR}/checkpoints}
 
-target_cache_dir=${target_cache_dir:-"/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec/.cache/${LOWER_MODEL_NAME}_target_cache"}
+token_cache_path=${token_cache_path:-"${DEEPSPEC_DIR}/.cache/${LOWER_MODEL_NAME}_token_cache"}
 TRAIN_LOG_CHECKPOINTS=${DEEPSPEC_DIR}/train_log_checkpoints
 CMD_SUFFIX=()
 
@@ -29,9 +29,14 @@ if [ -n "${REUSE_CKPT_DIR:-}" ]; then
         echo "错误: checkpoints复用目录不存在: $REUSE_CKPT_DIR" >&2
         exit 1
     fi
+    # resume_checkpoint_root="${REUSE_CKPT_DIR}/checkpoints"
     first_checkpoint_dir=$(find "$REUSE_CKPT_DIR/checkpoints" -mindepth 1 -maxdepth 1 -type d -print -quit)
     if [ -z "$first_checkpoint_dir" ]; then
         echo "错误: 未在 $REUSE_CKPT_DIR 找到 checkpoint 子目录" >&2
+        exit 1
+    fi
+    if [ ! -e "${first_checkpoint_dir}/step_latest" ]; then
+        echo "错误: 未在 ${first_checkpoint_dir} 找到 step_latest" >&2
         exit 1
     fi
     export BASE_TB_DIR=$REUSE_CKPT_DIR/tensorboard
@@ -39,7 +44,7 @@ if [ -n "${REUSE_CKPT_DIR:-}" ]; then
     OUTPUT_DIR=$REUSE_CKPT_DIR
     CMD_SUFFIX=(
         --opts 
-        "logging.resume_checkpoint_dir=${first_checkpoint_dir}"
+        "logging.resume_checkpoint_dir=${resume_checkpoint_root}"
     )
 else
     mkdir -p ${OUTPUT_DIR}
@@ -53,9 +58,9 @@ export TIMESTAMP=${TIMESTAMP}
 #     -o /mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec/scripts/train/profile/out_${TIMESTAMP} \
 python train.py \
     --config config/${spec_mode}/${spec_mode}_${LOWER_MODEL_NAME}.py \
-    --opts "data.target_cache_path=${target_cache_dir}" \
+    --opts "data.token_cache_path=${token_cache_path}" \
     --opts "data.num_workers=16" \
-    --opts "train.local_batch_size=2" \
+    --opts "train.local_batch_size=1" \
     --opts "train.num_train_epochs=10" \
     --opts "logging.checkpointing_steps=100" \
     --opts "logging.logging_steps=10" \

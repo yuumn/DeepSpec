@@ -100,9 +100,11 @@ train_datasets/qwen3_4b/perfectblend_train_regen_error.jsonl
 
 Stop the sglang servers before the next step if they are using the same GPUs.
 
-## Step 3: Prepare Target Cache
+## Step 3: Prepare Token Cache
 
-The training loop reads a precomputed target cache instead of repeatedly running the target model. Prepare it with:
+The training loop reads pre-tokenized inputs from disk and runs the target model
+online on each training GPU. The cache contains only `input_ids`,
+`attention_mask`, and `loss_mask`; it contains no hidden states. Prepare it with:
 
 ```bash
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
@@ -111,25 +113,21 @@ export MASTER_PORT=${MASTER_PORT:-29500}
 export RANK=${RANK:-0}
 export WORLD_SIZE=${WORLD_SIZE:-1}
 
-python scripts/data/prepare_target_cache.py \
+python scripts/data/prepare_token-ids_loss-mask.py \
     --config config/dspark/dspark_qwen3_4b.py \
     --train-data-path train_datasets/qwen3_4b/perfectblend_train_regen.jsonl \
-    --output-dir ${HOME}/.cache/deepspec/qwen3_4b_target_cache \
+    --output-dir .cache/qwen3_4b_token_cache \
     --local-batch-size 16
 ```
 
-> **Storage warning:** The target cache stores per-token hidden states for the
-> full training set and can be very large. With the default `Qwen/Qwen3-4B`
-> setting it takes roughly **38 TB** of disk. Make sure the `--output-dir`
-> filesystem has enough free space (scaling with dataset size, sequence length,
-> and target hidden dimension) before running this step. If storage is limited,
-> use a smaller training set and/or reduce `model.target_layer_ids` in the config
-> (fewer captured layers means proportionally less cache).
+The token cache is much smaller than the former target-hidden-state cache: each
+token uses four bytes for `input_ids` and one byte for each mask, plus a small
+fixed-size index record per sample.
 
 This produces the cache consumed by [scripts/train/train.sh](../train/train.sh):
 
 ```text
-~/.cache/deepspec/qwen3_4b_target_cache
+.cache/qwen3_4b_token_cache
 ```
 
 ## Wrapper Script

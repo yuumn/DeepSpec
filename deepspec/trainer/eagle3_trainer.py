@@ -1,6 +1,5 @@
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
-from deepspec.data import CacheCollator
 from deepspec.modeling.eagle3.gemma4 import Gemma4Eagle3Model
 from deepspec.modeling.eagle3.gemma4.config import (
     build_draft_config as build_gemma4_eagle3_config,
@@ -14,8 +13,6 @@ from deepspec.trainer.base_trainer import BaseTrainer
 
 
 class Qwen3Eagle3Trainer(BaseTrainer):
-    data_collator_cls = CacheCollator
-
     def build_models(self):
         model_args = self.args.model
 

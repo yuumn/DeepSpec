@@ -47,7 +47,7 @@ def main(local_rank):
             trainer.train()
 
         prof.export_chrome_trace(
-            f"/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec/scripts/train/profile/torch_profile_{os.environ.get("TIMESTAMP", "")}.json"
+            f"/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec/scripts/train/profile/torch_profile_{os.environ.get('TIMESTAMP', '')}.json"
         )
     else:
         trainer.train()

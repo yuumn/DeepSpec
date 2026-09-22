@@ -26,6 +26,94 @@ TARGET_CACHE_TOKEN_DTYPE  = "int32"
 TARGET_CACHE_MASK_DTYPE   = "uint8"
 
 
+@dataclass(frozen=True)
+class TargetForwardResult:
+    target_hidden_states: torch.Tensor
+    target_last_hidden_states: torch.Tensor
+
+
+def _get_target_backbone(target_model):
+    model_type = str(target_model.config.model_type)
+    if model_type in ("gemma4", "gemma4_unified"):
+        if hasattr(target_model, "language_model"):
+            return target_model.language_model
+        if hasattr(target_model, "model") and hasattr(
+            target_model.model, "language_model"
+        ):
+            return target_model.model.language_model
+        raise AssertionError(
+            "Gemma4 target model must expose a text language_model."
+        )
+    return getattr(target_model, "model", target_model)
+
+
+def _get_hook_tensor(output):
+    if isinstance(output, torch.Tensor):
+        return output
+    if isinstance(output, (tuple, list)) and output:
+        first = output[0]
+        if isinstance(first, torch.Tensor):
+            return first
+    raise TypeError(f"Unsupported target hook output type: {type(output)!r}")
+
+
+def run_target_forward_with_hooks(
+    *,
+    target_model,
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor,
+    target_layer_ids,
+):
+    """Run a frozen target model and collect the draft model's input features."""
+    backbone = _get_target_backbone(target_model)
+    layer_modules = backbone.layers
+    target_layer_ids = [int(layer_id) for layer_id in target_layer_ids]
+    captured_hidden_states = {}
+    handles = []
+
+    def capture_layer(layer_id: int):
+        def hook(_module, _inputs, output):
+            captured_hidden_states[layer_id] = _get_hook_tensor(output).detach()
+
+        return hook
+
+    try:
+        if -1 in target_layer_ids:
+            handles.append(
+                backbone.embed_tokens.register_forward_hook(capture_layer(-1))
+            )
+        for layer_id in target_layer_ids:
+            if layer_id < 0:
+                continue
+            handles.append(
+                layer_modules[layer_id].register_forward_hook(
+                    capture_layer(layer_id)
+                )
+            )
+
+        with torch.no_grad():
+            target_output = target_model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                output_hidden_states=False,
+                use_cache=False,
+            )
+            target_last_hidden_states = target_output.last_hidden_state.detach()
+            target_hidden_states = torch.cat(
+                [captured_hidden_states[layer_id] for layer_id in target_layer_ids],
+                dim=-1,
+            )
+    finally:
+        for handle in handles:
+            handle.remove()
+        captured_hidden_states.clear()
+
+    return TargetForwardResult(
+        target_hidden_states=target_hidden_states,
+        target_last_hidden_states=target_last_hidden_states,
+    )
+
+
 def atomic_json_dump(payload, path: str):
     tmp_path = f"{path}.tmp"
     with open(tmp_path, "w", encoding="utf-8") as handle:

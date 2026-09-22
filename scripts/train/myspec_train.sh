@@ -15,11 +15,11 @@
 # export BASE_TB_DIR=${BASE_TB_DIR:-${LOD_DIR}/tensorboard}
 # export BASE_CKPT_DIR=${BASE_CKPT_DIR:-${LOD_DIR}/checkpoints}
 
-# target_cache_dir=${target_cache_dir:-${DEEPSPEC_DIR}/.cache/qwen3_4b_target_cache}
+# token_cache_path=${token_cache_path:-${DEEPSPEC_DIR}/.cache/qwen3_4b_token_cache}
 
 # python train.py \
 #     --config config/myspec/myspec_qwen3_4b.py \
-#     --opts "data.target_cache_path=${target_cache_dir}" \
+#     --opts "data.token_cache_path=${token_cache_path}" \
 #     --opts "data.num_workers=16" \
 #     --opts "train.local_batch_size=4" \
 #     --opts "logging.checkpointing_steps=100" \
@@ -35,7 +35,7 @@
 # Here RANK/WORLD_SIZE mean node_rank/node_count, so WORLD_SIZE=1 is a
 # single-node local run; total GPU workers come from CUDA_VISIBLE_DEVICES.
 
-DEEPSPEC_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec
+DEEPSPEC_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 spec_mode=myspec
 LOWER_MODEL_NAME=qwen3_4b
@@ -50,7 +50,7 @@ export WORLD_SIZE=${WORLD_SIZE:-1}
 export BASE_TB_DIR=${BASE_TB_DIR:-${OUTPUT_DIR}/tensorboard}
 export BASE_CKPT_DIR=${BASE_CKPT_DIR:-${OUTPUT_DIR}/checkpoints}
 
-target_cache_dir=${target_cache_dir:-${DEEPSPEC_DIR}/.cache/qwen3_4b_target_cache}
+token_cache_path=${token_cache_path:-"${DEEPSPEC_DIR}/.cache/${LOWER_MODEL_NAME}_token_cache"}
 
 # mkdir -p ${OUTPUT_DIR}
 # mkdir -p ${OUTPUT_DIR}/code_config_deepspec
@@ -72,7 +72,7 @@ export TIMESTAMP=${TIMESTAMP}
 #     -o /mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/DeepSpec/scripts/train/profile/out_${TIMESTAMP} \
     python train.py \
     --config config/${spec_mode}/${spec_mode}_qwen3_4b.py \
-    --opts "data.target_cache_path=${target_cache_dir}" \
+    --opts "data.token_cache_path=${token_cache_path}" \
     --opts "data.num_workers=32" \
     --opts "train.local_batch_size=2" \
     --opts "logging.checkpointing_steps=100" \
