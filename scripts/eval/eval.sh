@@ -41,7 +41,7 @@ for epoch in $(seq $END -1 $START); do
     draft_name_or_path=${checkpoint_subdir}/step_${STEP}
 
     suffix="STEP_$STEP"
-    if [ $STRIDE -eq 2616 ]; then
+    if [ $STRIDE -eq 2616 || $STRIDE -eq 2618 ]; then
         suffix="epoch_${epoch}"
     fi
     echo "eval $suffix"
