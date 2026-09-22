@@ -44,7 +44,7 @@ if [ -n "${REUSE_CKPT_DIR:-}" ]; then
     OUTPUT_DIR=$REUSE_CKPT_DIR
     CMD_SUFFIX=(
         --opts 
-        "logging.resume_checkpoint_dir=${resume_checkpoint_root}"
+        "logging.resume_checkpoint_dir=${first_checkpoint_dir}"
     )
 else
     mkdir -p ${OUTPUT_DIR}
