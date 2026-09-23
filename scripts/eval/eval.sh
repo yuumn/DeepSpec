@@ -11,7 +11,7 @@ DEEPSPEC_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 MODEL_DIR=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/models
 
-target_name_or_path=${MODEL_DIR}/Qwen/Qwen3-4B
+target_name_or_path=${MODEL_DIR}/Qwen/Qwen3-8B
 
 checkpoint_dir=${1:-}
 STRIDE=${2:-2616}
@@ -41,7 +41,7 @@ for epoch in $(seq $END -1 $START); do
     draft_name_or_path=${checkpoint_subdir}/step_${STEP}
 
     suffix="STEP_$STEP"
-    if [ $STRIDE -eq 2616 || $STRIDE -eq 2618 ]; then
+    if [[ "$STRIDE" -eq 2616 || "$STRIDE" -eq 2618 ]]; then
         suffix="epoch_${epoch}"
     fi
     echo "eval $suffix"
