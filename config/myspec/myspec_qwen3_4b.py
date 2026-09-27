@@ -22,18 +22,18 @@ model = dict(
 
     ## Latent Cot
     num_latent_layers=2,
-    num_latent_tokens=4,
+    num_latent_tokens=2,
     latent_token_id=151670,
 
     ## markov head
-    # markov_rank=0,
-    markov_rank=256,
-    markov_head_type='vanilla',
+    markov_rank=0,
+    # markov_rank=256,
+    # markov_head_type='vanilla',
 
     ## confidence head
-    # confidence_head_alpha=0.0,
-    confidence_head_alpha=1.0,
-    confidence_head_with_markov=True,
+    confidence_head_alpha=0.0,
+    # confidence_head_alpha=1.0,
+    # confidence_head_with_markov=True,
 
     ## loss
     loss_decay_gamma=4.0,

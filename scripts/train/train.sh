@@ -5,7 +5,7 @@ echo "DEEPSPEC_DIR: ${DEEPSPEC_DIR}"
 TIMESTAMP=${TIMESTAMP:-$(date +%Y%m%d_%H%M%S)}
 spec_mode=${spec_mode:-myspec}
 LOWER_MODEL_NAME=${LOWER_MODEL_NAME:-qwen3_8b}
-CHECKPOINTS_DIR=${CHECKPOINTS_DIR:-"train_${spec_mode}-markov-conf_${LOWER_MODEL_NAME}_0.1ce-0.9l1_PerfectBlend__${TIMESTAMP}"}
+CHECKPOINTS_DIR=${CHECKPOINTS_DIR:-"train_${spec_mode}_${LOWER_MODEL_NAME}_2latent-token_0.1ce-0.9l1_PerfectBlend_${TIMESTAMP}"}
 OUTPUT_DIR=${DEEPSPEC_DIR}/train_log_checkpoints/${CHECKPOINTS_DIR}
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}
 export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
@@ -55,7 +55,7 @@ python train.py \
     --config config/${spec_mode}/${spec_mode}_${LOWER_MODEL_NAME}.py \
     --opts "data.target_cache_path=${target_cache_dir}" \
     --opts "data.num_workers=16" \
-    --opts "train.local_batch_size=2" \
+    --opts "train.local_batch_size=1" \
     --opts "train.num_train_epochs=10" \
     --opts "logging.checkpointing_steps=100" \
     --opts "logging.logging_steps=10" \
