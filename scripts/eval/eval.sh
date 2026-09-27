@@ -35,6 +35,7 @@ else
 fi
 output_dir=${checkpoint_dir}/eval
 mkdir -p ${output_dir}
+TEMPERATURE=${TEMPERATURE:-1.0}
 
 for epoch in $(seq $END -1 $START); do
     STEP=$((epoch * STRIDE))
@@ -48,7 +49,8 @@ for epoch in $(seq $END -1 $START); do
     DEEPSPEC_INFERENCE_EVAL=1 python eval.py \
         --target_name_or_path ${target_name_or_path} \
         --draft_name_or_path ${draft_name_or_path} \
-        2>&1 | tee -a ${output_dir}/myspec_${suffix}.log
+        --temperature ${TEMPERATURE} \
+        2>&1 | tee -a ${output_dir}/myspec_${suffix}_temperature-${TEMPERATURE}.log
         # --save-dataset-only \
         # --dataset-prompt-dir /mnt/dolphinfs/ssd_pool/docker/user/hadoop-efficient-llm/yuanerhang/workspace/spec/sglang/datasets \
 done
