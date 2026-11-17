@@ -1,0 +1,8 @@
+{
+  "repository_api": true,
+  "idempotent": true,
+  "reference_unmodified": true,
+  "autograd_guard": true,
+  "graph_reads_updated_inputs": true,
+  "restore_exact": true
+}

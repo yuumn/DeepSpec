@@ -31,6 +31,10 @@ def forward(model, context, anchor, mode):
     ids[:,0] = lids[:,0] = anchor
     cache = DynamicCache()
     def block(ctx, start):
+        if mode == 'no_cache':
+            from no_cache_draft import forward_without_cache
+            return forward_without_cache(model, context=ctx, ids=ids,
+                latent_ids=lids, positions=positions, start=start)
         return forward_myspec_draft_block(model, draft_latent_input_ids=lids,
             draft_input_ids=ids, position_ids=positions, past_key_values_draft=cache,
             target_hidden_states=ctx, start=start, block_size=c.block_size)
@@ -44,11 +48,13 @@ def forward(model, context, anchor, mode):
     tokens, corrected = model.sample_draft_tokens(logits, first_prev_token_ids=ids[:,0],temperature=0.,hidden_states=hidden)
     proposal = build_myspec_proposal(model, draft_input_ids=ids, block_hidden=hidden,
         block_size=c.block_size,temperature=0.,confidence_threshold=0.)
-    return dict(hidden=hidden,logits=logits,corrected_logits=corrected,
+    result = dict(hidden=hidden,logits=logits,corrected_logits=corrected,
         tokens=proposal.verify_input_ids, confidence=proposal.confidence_logits,
-        probs=proposal.draft_probs,
-        cache_keys=torch.stack([x.keys for x in cache.layers]),
-        cache_values=torch.stack([x.values for x in cache.layers]))
+        probs=proposal.draft_probs)
+    if mode != 'no_cache':
+        result.update(cache_keys=torch.stack([x.keys for x in cache.layers]),
+                      cache_values=torch.stack([x.values for x in cache.layers]))
+    return result
 
 
 @torch.inference_mode()
@@ -56,14 +62,16 @@ def main():
     p=argparse.ArgumentParser()
     p.add_argument('--models',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True)
+    p.add_argument('--lengths', nargs='+', type=int, default=[512,1024,2048,4096])
+    p.add_argument('--cache-modes', nargs='+', default=['full_context','cached_7_new'])
     a=p.parse_args()
     torch.set_num_threads(1)
     model=make_model(a.models/'dspark_latentspec/step_2616')
     opt=optimize_latentspec(copy.deepcopy(model))
     results=[]
     for seed in [11,42,2026]:
-      for n in [512,1024,2048,4096]:
-       for mode in ['full_context','cached_7_new']:
+      for n in a.lengths:
+       for mode in a.cache_modes:
         torch.manual_seed(seed+n)
         context=torch.randn(1,n,12800,device='cuda',dtype=torch.bfloat16)
         anchor=torch.randint(0,model.config.vocab_size,(1,),device='cuda')
@@ -76,12 +84,12 @@ def main():
             if key in ['tokens','probs']:
                 torch.testing.assert_close(y,x,rtol=0,atol=0)
             else:
-                torch.testing.assert_close(y,x,rtol=.02,atol=.03)
+                torch.testing.assert_close(y,x,rtol=0,atol=0)
             delta=(y.float()-x.float())
             errors[key]=dict(max_abs=delta.abs().max().item(),relative_l2=(delta.norm()/x.float().norm().clamp_min(1e-12)).item(),exact=torch.equal(x,y))
         results.append(dict(seed=seed,length=n,cache_mode=mode,errors=errors))
         print(json.dumps(results[-1]),flush=True)
         a.output.write_text(json.dumps(results,indent=2))
-    print('PASS: 24 input/cache cases; identical greedy tokens/probabilities, bounded BF16 tensor error.',flush=True)
+    print(f'PASS: {len(results)} input/cache cases; identical greedy tokens/probabilities, bitwise-identical intermediate tensors.',flush=True)
 
 if __name__=='__main__':main()

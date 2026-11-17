@@ -1,4 +1,4 @@
-"""Single-request full-context draft latency, using unmodified DeepSpec eval ops.
+"""Single-request draft latency: original eval ops plus optional exact RoPE fusion.
 Run with PYTHONPATH pointing at the recorded DeepSpec source snapshot.
 """
 import argparse
@@ -35,7 +35,7 @@ def benchmark(model, name, length, rounds, repeats, cache_mode):
                           device='cuda', dtype=torch.bfloat16)
     first_token = torch.tensor([1234], device='cuda')
     positions = torch.arange(length + c.block_size, device='cuda')[None]
-    latent = name == 'dspark_latentspec'
+    latent = name.startswith('dspark_latentspec')
 
     prefix_cache = None
     if cache_mode == 'cached_7_new':
@@ -71,10 +71,20 @@ def benchmark(model, name, length, rounds, repeats, cache_mode):
             latent_ids = torch.full((1, c.num_latent_tokens), c.latent_token_id,
                                     device='cuda', dtype=torch.long)
             latent_ids[:, 0] = first_token
-            hidden = forward_myspec_draft_block(model, draft_latent_input_ids=latent_ids, **kwargs)
+            if cache_mode == 'no_cache':
+                from no_cache_draft import forward_without_cache
+                hidden = forward_without_cache(model, context=context, ids=ids,
+                    latent_ids=latent_ids, positions=positions, start=length)
+            else:
+                hidden = forward_myspec_draft_block(model, draft_latent_input_ids=latent_ids, **kwargs)
             builder = build_myspec_proposal
         else:
-            hidden = forward_dspark_draft_block(model, **kwargs)
+            if cache_mode == 'no_cache':
+                from no_cache_draft import forward_without_cache
+                hidden = forward_without_cache(model, context=context, ids=ids,
+                    latent_ids=None, positions=positions, start=length)
+            else:
+                hidden = forward_dspark_draft_block(model, **kwargs)
             builder = build_dspark_proposal
         proposal = builder(model, draft_input_ids=ids, block_hidden=hidden,
                            block_size=c.block_size, temperature=0., confidence_threshold=0.)
@@ -136,8 +146,10 @@ def main():
     p.add_argument('--output', type=Path, required=True)
     p.add_argument('--rounds', type=int, default=5)
     p.add_argument('--repeats', type=int, default=200)
-    p.add_argument('--variant', choices=['baseline', 'packed'], default='packed')
+    p.add_argument('--variant', choices=['baseline', 'rope'], default='rope')
     p.add_argument('--lengths', nargs='+', type=int, default=[512, 1024, 2048, 4096])
+    p.add_argument('--include-reference', action='store_true')
+    p.add_argument('--cache-modes', nargs='+', choices=['full_context','cached_7_new','no_cache'], default=['full_context','cached_7_new'])
     a = p.parse_args()
     torch.set_num_threads(1)
     torch.manual_seed(42)
@@ -146,12 +158,17 @@ def main():
                   cuda_home=os.getenv('CUDA_HOME'), source_commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), gpu=torch.cuda.get_device_name(),
                   gpu_info=subprocess.check_output(['nvidia-smi', '--query-gpu=index,uuid,name,driver_version,pstate,temperature.gpu,power.limit', '--format=csv'], text=True),
                   batch_size=1, dtype='bfloat16', attention='sdpa', block_size=7,
-                  temperature=0, confidence_threshold=0, cache_modes=['full_context', 'cached_7_new'], weights='random initialized from checkpoint architecture config, seed 42',
+                  temperature=0, confidence_threshold=0, cache_modes=a.cache_modes, context_lengths=a.lengths, weights='random initialized from checkpoint architecture config, seed 42',
                   input='seeded synthetic target hidden states, resident on GPU',
                   timing='perf_counter_ns: graph.replay plus cuda.synchronize; GPU outputs',
                   rounds=a.rounds, repeats=a.repeats, variant=a.variant), results=[])
-    for name, cls in [('dspark', Qwen3DSparkModel), ('dspark_latentspec', Qwen3MySpecModel)]:
-        checkpoint = a.models/name/'step_2616'
+    variants = [('dspark', Qwen3DSparkModel)]
+    if a.include_reference:
+        variants.append(('dspark_latentspec_original', Qwen3MySpecModel))
+    variants.append(('dspark_latentspec', Qwen3MySpecModel))
+    for name, cls in variants:
+        torch.manual_seed(42)  # Original and optimized latent models get identical weights.
+        checkpoint = a.models/('dspark_latentspec' if name.startswith('dspark_latentspec') else name)/'step_2616'
         config = Qwen3Config.from_pretrained(checkpoint)
         config._attn_implementation = 'sdpa'
         with torch.device('cuda'):
@@ -159,12 +176,12 @@ def main():
             torch.set_default_dtype(torch.bfloat16)
             model = cls(config).eval()
             torch.set_default_dtype(old_dtype)
-        if name == 'dspark_latentspec' and a.variant == 'packed':
+        if name == 'dspark_latentspec' and a.variant == 'rope':
             from optimized_myspec import optimize_latentspec
             optimize_latentspec(model)
         for length in a.lengths:
             torch.cuda.reset_peak_memory_stats()
-            for cache_mode in ['full_context', 'cached_7_new']:
+            for cache_mode in a.cache_modes:
                 report['results'].append(benchmark(model, name, length, a.rounds, a.repeats, cache_mode))
             a.output.write_text(json.dumps(report, indent=2))
             gc.collect()
