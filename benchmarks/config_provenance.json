@@ -1,0 +1,57 @@
+{
+  "dspark": {
+    "source": "/raid/yeh/iclr/DeepSpec/config/dspark/dspark_qwen3_4b.py",
+    "sha256": "f7ae3b21dd770c4c6fc85ff186663fa0f3a7f52f01d5cdb7cd14f095d1e531d0",
+    "model_args": {
+      "target_model_name_or_path": "Qwen/Qwen3-4B",
+      "block_size": 7,
+      "num_draft_layers": 5,
+      "target_layer_ids": [
+        1,
+        9,
+        17,
+        25,
+        33
+      ],
+      "mask_token_id": 151669,
+      "num_anchors": 512,
+      "markov_rank": 256,
+      "markov_head_type": "vanilla",
+      "confidence_head_alpha": 1.0,
+      "confidence_head_with_markov": true,
+      "loss_decay_gamma": 4.0,
+      "ce_loss_alpha": 0.1,
+      "l1_loss_alpha": 0.9
+    },
+    "architecture_matches": true
+  },
+  "dspark_latentspec": {
+    "source": "/raid/yeh/iclr/download_DeepSpec/DeepSpec_latent_reasoning_diff-pos_0908_code/train_log_checkpoints/train_myspec-markov-conf_qwen3_4b_0.1ce-0.9l1_PerfectBlend__20260916_215802/config/myspec/myspec_qwen3_4b.py",
+    "sha256": "0a97e24408014bb74efb3983ae085618f57bb0e7690675fe9820b4d2648065c3",
+    "model_args": {
+      "target_model_name_or_path": "Qwen/Qwen3-4B",
+      "block_size": 7,
+      "num_draft_layers": 3,
+      "target_layer_ids": [
+        1,
+        9,
+        17,
+        25,
+        33
+      ],
+      "mask_token_id": 151669,
+      "num_anchors": 512,
+      "num_latent_layers": 2,
+      "num_latent_tokens": 4,
+      "latent_token_id": 151670,
+      "markov_rank": 256,
+      "markov_head_type": "vanilla",
+      "confidence_head_alpha": 1.0,
+      "confidence_head_with_markov": true,
+      "loss_decay_gamma": 4.0,
+      "ce_loss_alpha": 0.1,
+      "l1_loss_alpha": 0.9
+    },
+    "architecture_matches": true
+  }
+}

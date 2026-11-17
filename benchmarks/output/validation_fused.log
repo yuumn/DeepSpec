@@ -1,0 +1,16 @@
+Traceback (most recent call last):
+  File "/root/DeepSpec/benchmarks/validate_optimized.py", line 87, in <module>
+    if __name__=='__main__':main()
+                            ^^^^^^
+  File "/root/DeepSpec/.venv/lib/python3.12/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/root/DeepSpec/benchmarks/validate_optimized.py", line 79, in main
+    torch.testing.assert_close(y,x,rtol=.02,atol=.03)
+  File "/root/DeepSpec/.venv/lib/python3.12/site-packages/torch/testing/_comparison.py", line 1589, in assert_close
+    raise error_metas[0].to_error(msg)
+AssertionError: Tensor-likes are not close!
+
+Mismatched elements: 30 / 17920 (0.2%)
+Greatest absolute difference: 0.05078125 at index (0, 3, 1470) (up to 0.03 allowed)
+Greatest relative difference: 1.34375 at index (0, 3, 416) (up to 0.02 allowed)
