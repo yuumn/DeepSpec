@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source /home/yeh/workspace/icml/sglang/.venv/bin/activate
+unset http_proxy https_proxy
+
+mkdir -p /raid/yeh/sglang-tmp /raid/yeh/sglang-cache
+export TMPDIR=/raid/yeh/sglang-tmp 
+export FLASHINFER_WORKSPACE_BASE=/raid/yeh/sglang-cache 
+export SGLANG_SKIP_SGL_KERNEL_VERSION_CHECK=1
+
 # Requires SGLang to be installed separately (not in requirements.txt):
 #   pip install "sglang[all]"
 # See https://docs.sglang.ai/get_started/install.html for details.
 
-# model_path=Qwen/Qwen3-4B
+# model_name=Qwen/Qwen3-4B
 model_name=Qwen/Qwen3-8B
-model_path=/mnt/dolphinfs/hdd_pool/docker/user/hadoop-hldy-nlp/MMA/yuanerhang/workspace/spec/models/Qwen/Qwen3-8B
+model_path=/home/yeh/workspace/icml/models/Qwen/Qwen3-8B
 num_workers=8
 start_port=30000
 start_nccl_port=31000
